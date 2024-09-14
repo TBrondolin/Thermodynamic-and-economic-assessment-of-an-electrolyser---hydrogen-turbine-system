@@ -490,12 +490,12 @@ for i in np.linspace(0, (365 * 24 * 2), (365 * 24 * 2)):
     Cp_meanH2 = ((Hydro.cp + compH2.cp) / 2) / 1000
     #print(Cp_meanH2)
     TH22 = ((TH2s - TH2) / eta_H2) + TH2
-    #P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
+    P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
     #print(ei * 1000/(60*30))
     #print(P)
     #E = ei * 1000 / (60 * 30) * Cp_meanH2 * (TH22 - TH2) * 60 * 30 / 2 #kWh
     #print(E)
-    #energy.append(P)
+    energy.append(P)
 #maxim = max(compressed)
 #print("Maximum flow rate: {:2f} kg/s".format(maxim*1000/(60*30)))
 #en = sum(energy)
@@ -1640,12 +1640,12 @@ for i in np.linspace(0, (365 * 24 * 2), (365 * 24 * 2)):
     Cp_meanH2 = ((Hydro.cp + compH2.cp) / 2) / 1000
     #print(Cp_meanH2)
     TH22 = ((TH2s - TH2) / eta_H2) + TH2
-    #P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
+    P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
     #print(ei * 1000/(60*30))
     #print(P)
     #E = ei * 1000 / (60 * 30) * Cp_meanH2 * (TH22 - TH2) * 60 * 30 / 2 #kWh
     #print(E)
-    #energy.append(P)
+    energy.append(P)
 #maxim = max(compressed)
 #print("Maximum flow rate: {:2f} kg/s".format(maxim*1000/(60*30)))
 #en = sum(energy)
