@@ -1,0 +1,723 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+#Wind farm parameters
+Capex_wind = 1350 * 0.92 #euro/kW
+Opex_wind = 42 * 0.92 #euro/kW
+L_wind = 20 #years
+Wind_size_PEM = [17500, 21875, 26250, 84000] #kW
+
+#PEM electrolyzer parameters
+Capex_PEM = 1337 * 0.92 #euro/kW
+Opex_PEM = 20 * 0.92 #euro/kW
+Repex_PEM = 210 #euro/kW
+L_PEM = 15 #years
+PEM_size = [17500, 21875, 26250, 84000] #kW
+
+#Compressor electrolyzer parameters
+Capex_comp = 1800 * 0.92 #euro/kW
+Opex_comp = 0.03 * Capex_comp #euro/kW
+L_comp = 20 #years
+comp_size_PEM = [500,625,750,2250] #kW
+
+#Hydrogen tank parameters
+Capex_tank = 500 * 0.92 #euro/kg
+Opex_tank = 12 * 0.92 #euro/kg
+tank_size_PEM = [500000,700000,800000,900000] #kg
+
+#Turbine parameters
+#The CAPEX of the turbine is assumed to be 0
+Opex_turbine = 4 #euro/mWh
+
+#Production of hydrogen for PEM (obtained from*)
+PEM_h2 = [1854600,2164600,2431200,3672600] #kg 1854600,2164600,2431200,3672600
+
+#kWh and MWh per year for the gas turbine (obtained from excel file)
+kWh = [21583011*0.975,21583011,21583011,21583011+21305357] #kWh turbine/s  0.975 is due to the scaling because the hydrogen produced is less than the needed
+MWh = [21583.011*0.975,21583.011,21583.011,21583.011+21305.357] #MWh turbine/s
+
+#Terms related to the the interest rate (i), the inflation rate (f) and the degradation rate (d)
+f = 0.0655
+i = (0.0875 - f) / (1 + f)
+d = 0
+
+i_LCOCH1 = []
+f_LCOCH1 = []
+d_LCOCH1 = []
+i_LCOE1 = []
+f_LCOE1 = []
+d_LCOE1 = []
+i_LCOCH2 = []
+f_LCOCH2 = []
+d_LCOCH2 = []
+i_LCOE2 = []
+f_LCOE2 = []
+d_LCOE2 = []
+i_LCOCH3 = []
+f_LCOCH3 = []
+d_LCOCH3 = []
+i_LCOE3 = []
+f_LCOE3 = []
+d_LCOE3 = []
+i_LCOCH4 = []
+f_LCOCH4 = []
+d_LCOCH4 = []
+i_LCOE4 = []
+f_LCOE4 = []
+d_LCOE4 = []
+
+#PEM system computation
+#LCOH calculation
+for j in range(0,4):
+    def sommatoria(n):
+        LCOH = 0
+        LCOM = 0
+        h2 = 0
+        for e in range(1, n + 1):
+            LCOM += ((Opex_PEM * PEM_size[j] + Opex_wind * Wind_size_PEM[j]) / ((1 + i) ** e))
+            CAPEX = (Capex_PEM * PEM_size[j] + Capex_wind * Wind_size_PEM[j])
+            REPEX = (Repex_PEM * PEM_size[j]) / ((1 + i) ** 15)
+            h2 += PEM_h2[j]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOH = (LCOM + CAPEX + REPEX) / (h2)
+        return LCOH
+
+
+    n = 20  # years
+    print(f"The LCOH for the PEM system after 20 years is: {sommatoria(n)}")
+
+
+    # LCOE for the LCOH
+    def sommatoria(k):
+        LCOM = 0
+        LCOM1 = 0
+        kw = 0
+        for e in range(1, k + 1):
+            LCOM += ((Opex_PEM * PEM_size[j] + Opex_wind * Wind_size_PEM[j]) / ((1 + i) ** e))
+            CAPEX = (Capex_PEM * PEM_size[j] + Capex_wind * Wind_size_PEM[j])
+            REPEX = (Repex_PEM * PEM_size[j]) / ((1 + i) ** 15)
+            LCOM1 += ((Opex_turbine * (MWh[j])) / ((1 + i) ** e))
+            kw += kWh[j]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        return LCOE1
+
+
+    k = 20  # years
+    print(f"The LCOE for the PEM system without storage after 20 years is euro/kwh: {sommatoria(k)}")
+
+
+    # LCOCH calculation
+    def sommatoria(n):
+        LCOCH = 0
+        LCOM = 0
+        OPEX_wind = 0
+        OPEX_PEM = 0
+        OPEX_tank = 0
+        OPEX_comp = 0
+        h2 = 0
+        for e in range(1, n + 1):
+            LCOM += ((Opex_PEM * PEM_size[j] + Opex_tank * tank_size_PEM[j] + Opex_comp * comp_size_PEM[j] + Opex_wind * Wind_size_PEM[j]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_PEM * PEM_size[j] + Capex_tank * tank_size_PEM[j] + Capex_comp * comp_size_PEM[j] + Capex_wind * Wind_size_PEM[j])
+            REPEX = (Repex_PEM * PEM_size[j]) / ((1 + i) ** 15)
+            h2 += PEM_h2[j]  # / ((1 + i) ** e)
+            CAPEX_PEM = Capex_PEM * PEM_size[j]
+            CAPEX_tank = Capex_tank * tank_size_PEM[j]
+            CAPEX_comp = Capex_comp * comp_size_PEM[j]
+            CAPEX_wind = Capex_wind * Wind_size_PEM[j]
+            OPEX_PEM += Opex_PEM * PEM_size[j] / ((1 + i) ** e)
+            OPEX_tank += Opex_tank * tank_size_PEM[j] / ((1 + i) ** e)
+            OPEX_comp += Opex_comp * comp_size_PEM[j] / ((1 + i) ** e)
+            OPEX_wind += Opex_wind * Wind_size_PEM[j] / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH = (LCOM + CAPEX + REPEX) / (h2)
+
+                print("The CAPEX for the PEM system is: {:.2f}".format(CAPEX_PEM), "Euro")
+                print("The OPEX for the PEM system is: {:.2f}".format(OPEX_PEM), "Euro")
+                print("The REPEX for the PEM system is: {:.2f}".format(REPEX), "Euro")
+                print("The CAPEX for the wind farm is: {:.2f}".format(CAPEX_wind), "Euro")
+                print("The OPEX for the wind farm is: {:.2f}".format(OPEX_wind), "Euro")
+                print("The CAPEX for the storage tank is: {:.2f}".format(CAPEX_tank), "Euro")
+                print("The OPEX for the storage tank is: {:.2f}".format(OPEX_tank), "Euro")
+                print("The CAPEX for the compressor is: {:.2f}".format(CAPEX_comp), "Euro")
+                print("The OPEX for the compressor is: {:.2f}".format(OPEX_comp), "Euro")
+
+        return LCOCH
+
+
+    n = 20  # years
+    print(f"The LCOCH for the PEM system after 20 years is: {sommatoria(n)}")
+
+
+    # LCOE for the LCOCH
+    def sommatoria(h):
+        LCOM1 = 0
+        LCOM = 0
+        h2 = 0
+        kw = 0
+        for e in range(1, h + 1):
+            LCOM += ((
+                                 Opex_PEM * PEM_size[j] + Opex_tank * tank_size_PEM[j] + Opex_comp * comp_size_PEM[j] + Opex_wind * Wind_size_PEM[j]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_PEM * PEM_size[j] + Capex_tank * tank_size_PEM[j] + Capex_comp * comp_size_PEM[j] + Capex_wind * Wind_size_PEM[j])
+            REPEX = (Repex_PEM * PEM_size[j]) / ((1 + i) ** 15)
+            LCOM1 += ((Opex_turbine * (MWh[j])) / ((1 + i) ** e))
+            kw += kWh[j]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOE2 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        return LCOE2
+
+
+    h = 20  # years
+    print(f"The LCOE for the PEM system with the storage after 20 years is euro/kg: {sommatoria(h)}")
+    print("END")
+    # variation of LCOCH and LCOE for differents i,f,d
+    i_values = np.linspace(0.01, 0.14, 1000)
+    f_values = np.linspace(0.01, 0.12, 1000)
+    d_values = np.linspace(0, 0.025, 1000)
+
+
+    # variation of nominal interest rate
+    for i_val in i_values:
+        f = 0.0655
+        d = 0
+        i = (i_val - f) / (1 + f)
+        LCOM = 0
+        LCOM1 = 0
+        h2 = 0
+        kw = 0
+        n = 20  # years
+        for e in range(1, n + 1):
+            LCOM += ((
+                                 Opex_PEM * PEM_size[j] + Opex_tank * tank_size_PEM[j] + Opex_comp * comp_size_PEM[j] + Opex_wind * Wind_size_PEM[j]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_PEM * PEM_size[j] + Capex_tank * tank_size_PEM[j] + Capex_comp * comp_size_PEM[j] + Capex_wind * Wind_size_PEM[j])
+            REPEX = (Repex_PEM * PEM_size[j]) / ((1 + i) ** 15)
+            LCOM1 += ((Opex_turbine * (MWh[j])) / ((1 + i) ** e))
+            h2 += PEM_h2[j]  # / ((1 + i) ** e)
+            kw += kWh[j]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH1 = (LCOM + CAPEX + REPEX) / (h2)
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        if j==0:
+            i_LCOCH1.append(LCOCH1)
+            i_LCOE1.append(LCOE1)
+        if j==1:
+            i_LCOCH2.append(LCOCH1)
+            i_LCOE2.append(LCOE1)
+        if j==2:
+            i_LCOCH3.append(LCOCH1)
+            i_LCOE3.append(LCOE1)
+        if j==3:
+            i_LCOCH4.append(LCOCH1)
+            i_LCOE4.append(LCOE1)
+
+    # variation of inflation rate
+    for f_val in f_values:
+        i_nom = 0.0875
+        d = 0
+        i = (i_nom - f_val) / (1 + f_val)
+        LCOM = 0
+        LCOM1 = 0
+        h2 = 0
+        kw = 0
+        n = 20  # years
+        for e in range(1, n + 1):
+            LCOM += ((
+                                 Opex_PEM * PEM_size[j] + Opex_tank * tank_size_PEM[j] + Opex_comp * comp_size_PEM[j] + Opex_wind * Wind_size_PEM[j]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_PEM * PEM_size[j] + Capex_tank * tank_size_PEM[j] + Capex_comp * comp_size_PEM[j] + Capex_wind * Wind_size_PEM[j])
+            REPEX = (Repex_PEM * PEM_size[j]) / ((1 + i) ** 15)
+            LCOM1 += ((Opex_turbine * (MWh[j])) / ((1 + i) ** e))
+            CAPEX1 = 0
+            REPEX1 = 0
+            h2 += PEM_h2[j]  # / ((1 + i) ** e)
+            kw += kWh[j]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH1 = (LCOM + CAPEX + REPEX) / (h2)
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        if j==0:
+            f_LCOCH1.append(LCOCH1)
+            f_LCOE1.append(LCOE1)
+        if j==1:
+            f_LCOCH2.append(LCOCH1)
+            f_LCOE2.append(LCOE1)
+        if j==2:
+            f_LCOCH3.append(LCOCH1)
+            f_LCOE3.append(LCOE1)
+        if j==3:
+            f_LCOCH4.append(LCOCH1)
+            f_LCOE4.append(LCOE1)
+
+    # variation of degradation rate
+    for d_val in d_values:
+        i_nom = 0.0875
+        f = 0.0655
+        i = (i_nom - f) / (1 + f)
+        LCOM = 0
+        LCOM1 = 0
+        h2 = 0
+        kw = 0
+        n = 20  # years
+        for e in range(1, n + 1):
+            LCOM1 += ((4 * (MWh[j])) / ((1 + i) ** e))
+            CAPEX1 = 0
+            LCOM += ((
+                                 Opex_PEM * PEM_size[j] + Opex_tank * tank_size_PEM[j] + Opex_comp * comp_size_PEM[j] + Opex_wind * Wind_size_PEM[j]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_PEM * PEM_size[j] + Capex_tank * tank_size_PEM[j] + Capex_comp * comp_size_PEM[j] + Capex_wind * Wind_size_PEM[j])
+            REPEX = (Repex_PEM * PEM_size[j]) / ((1 + i) ** 15)
+            h2 += PEM_h2[j]  # / ((1 + i) ** e)
+            kw += kWh[j]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH1 = (LCOM + CAPEX + REPEX) / ((1 - e * d_val) * (h2))
+                # print("sold",LCOH1)
+            if (e == 20):
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (((1 - e * d_val) * (kw)))
+        if j == 0:
+            d_LCOCH1.append(LCOCH1)
+            d_LCOE1.append(LCOE1)
+        if j == 1:
+            d_LCOCH2.append(LCOCH1)
+            d_LCOE2.append(LCOE1)
+        if j == 2:
+            d_LCOCH3.append(LCOCH1)
+            d_LCOE3.append(LCOE1)
+        if j == 3:
+            d_LCOCH4.append(LCOCH1)
+            d_LCOE4.append(LCOE1)
+
+plt.plot(i_values*100, i_LCOCH1, label='17.5 MW')
+plt.plot(i_values*100, i_LCOCH2, label='21.875 MW')
+plt.plot(i_values*100, i_LCOCH3, label='26.25 MW')
+plt.plot(i_values*100, i_LCOCH4, label='87.5 MW')
+plt.xlabel('Interest rate (%)')
+plt.ylabel('LCOCH €/kg')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(f_values*100, f_LCOCH1, label='17.5 MW')
+plt.plot(f_values*100, f_LCOCH2, label='21.875 MW')
+plt.plot(f_values*100, f_LCOCH3, label='26.25 MW')
+plt.plot(f_values*100, f_LCOCH4, label='87.5 MW')
+plt.xlabel('Inflation rate (%)')
+plt.ylabel('LCOCH €/kg')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(d_values*100, d_LCOCH1, label='17.5 MW')
+plt.plot(d_values*100, d_LCOCH2, label='21.875 MW')
+plt.plot(d_values*100, d_LCOCH3, label='26.25 MW')
+plt.plot(d_values*100, d_LCOCH4, label='87.5 MW')
+plt.xlabel('Degradation rate (%)')
+plt.ylabel('LCOCH €/kg')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(i_values*100, i_LCOE1, label='17.5 MW')
+plt.plot(i_values*100, i_LCOE2, label='21.875 MW')
+plt.plot(i_values*100, i_LCOE3, label='26.25 MW')
+plt.plot(i_values*100, i_LCOE4, label='87.5 MW')
+plt.xlabel('Interest rate (%)')
+plt.ylabel('LCOE €/kWh')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(f_values*100, f_LCOE1, label='17.5 MW')
+plt.plot(f_values*100, f_LCOE2, label='21.875 MW')
+plt.plot(f_values*100, f_LCOE3, label='26.25 MW')
+plt.plot(f_values*100, f_LCOE4, label='87.5 MW')
+plt.xlabel('Inflation rate (%)')
+plt.ylabel('LCOE €/kWh')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(d_values*100, d_LCOE1, label='17.5 MW')
+plt.plot(d_values*100, d_LCOE2, label='21.875 MW')
+plt.plot(d_values*100, d_LCOE3, label='26.25 MW')
+plt.plot(d_values*100, d_LCOE4, label='87.5 MW')
+plt.xlabel('Degradation rate (%)')
+plt.ylabel('LCOE €/kWh')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
+
+#SOC system
+#Change size based on case: 10720, 13400, 16080, 32120 kW
+#Wind farm parameters
+Capex_wind = 1350 * 0.92 #euro/kW
+Opex_wind = 42 * 0.92 #euro/kW
+L_wind = 20 #years
+Wind_size_SOC = [10720,13400, 16080, 32120] #kW
+
+#SOC electrolyzer parameters
+Capex_SOC = 2000 #euro/kW
+Opex_SOC = 20 * 0.92 #euro/kW
+Repex_SOC = 210 #euro/kW
+L_SOC = 10 #years
+SOC_size = [10720,13400, 16080, 32120] #kW
+
+#Compressor electrolyzer parameters
+Capex_comp = 1800 * 0.92 #euro/kW
+Opex_comp = 0.03 * Capex_comp #euro/kW
+L_comp = 20 #years
+comp_size_SOC = [265,335,400,800] #kW
+
+#Hydrogen tank parameters
+Capex_tank = 500 * 0.92 #euro/kg
+Opex_tank = 12 * 0.92 #euro/kg
+tank_size_SOC = [500000,650000,850000,950000] #kg
+
+#Turbine parameters
+#The CAPEX of the turbine is assumed to be 0
+Opex_turbine = 4 #euro/mWh
+
+#Production of hydrogen for SOC (obtained from*)
+SOC_h2 = [1771400,2118700,2434600,3811780] #kg 1771400,2118700,2434600,3811780
+
+#kWh and MWh per year for the gas turbine (obtained from excel file)
+kWh = [21583011*0.931,21583011,21583011,21583011+21305357] #kWh turbine/s 0.931 is due to the scaling because the hydrogen produced is less than the needed
+MWh = [21583.011*0.931,21583.011,21583.011,21583.011+21305.357] #MWh turbine/s
+
+
+#Terms related to the the interest rate (i), the inflation rate (f) and the degradation rate (d)
+f = 0.0655
+i = (0.0875 - f) / (1 + f)
+d = 0
+
+i_LCOCH5 = []
+f_LCOCH5 = []
+d_LCOCH5 = []
+i_LCOE5 = []
+f_LCOE5 = []
+d_LCOE5 = []
+i_LCOCH6 = []
+f_LCOCH6 = []
+d_LCOCH6 = []
+i_LCOE6 = []
+f_LCOE6 = []
+d_LCOE6 = []
+i_LCOCH7 = []
+f_LCOCH7 = []
+d_LCOCH7 = []
+i_LCOE7 = []
+f_LCOE7 = []
+d_LCOE7 = []
+i_LCOCH8 = []
+f_LCOCH8 = []
+d_LCOCH8 = []
+i_LCOE8 = []
+f_LCOE8 = []
+d_LCOE8 = []
+
+#SOC system computation
+#LCOH calculation
+for l in range(0,4):
+    def sommatoria(n):
+        LCOH = 0
+        LCOM = 0
+        h2 = 0
+        for e in range(1, n + 1):
+            LCOM += ((Opex_SOC * SOC_size[l] + Opex_wind * Wind_size_SOC[l]) / ((1 + i) ** e))
+            CAPEX = (Capex_SOC * SOC_size[l] + Capex_wind * Wind_size_SOC[l])
+            REPEX = (Repex_SOC * SOC_size[l]) / ((1 + i) ** 15)
+            h2 += SOC_h2[l]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOH = (LCOM + CAPEX + REPEX) / (h2)
+        return LCOH
+
+
+    n = 20  # years
+    print(f"The LCOH for the SOC system after 20 years is: {sommatoria(n)}")
+
+
+    # LCOE for the LCOH
+    def sommatoria(k):
+        LCOM = 0
+        LCOM1 = 0
+        kw = 0
+        for e in range(1, k + 1):
+            LCOM += ((Opex_SOC * SOC_size[l] + Opex_wind * Wind_size_SOC[l]) / ((1 + i) ** e))
+            CAPEX = (Capex_SOC * SOC_size[l] + Capex_wind * Wind_size_SOC[l])
+            REPEX = (Repex_SOC * SOC_size[l]) / ((1 + i) ** 15)
+            LCOM1 += ((Opex_turbine * (MWh[l])) / ((1 + i) ** e))
+            kw += kWh[l]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        return LCOE1
+
+
+    k = 20  # years
+    print(f"The LCOE for the SOC system without storage after 20 years is euro/kwh: {sommatoria(k)}")
+
+
+    # LCOCH calculation
+    def sommatoria(n):
+        LCOCH = 0
+        LCOM = 0
+        OPEX_wind = 0
+        OPEX_SOC = 0
+        OPEX_tank = 0
+        OPEX_comp = 0
+        h2 = 0
+        for e in range(1, n + 1):
+            LCOM += ((Opex_SOC * SOC_size[l] + Opex_tank * tank_size_SOC[l] + Opex_comp * comp_size_SOC[l] + Opex_wind * Wind_size_SOC[l]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_SOC * SOC_size[l] + Capex_tank * tank_size_SOC[l] + Capex_comp * comp_size_SOC[l] + Capex_wind * Wind_size_SOC[l])
+            REPEX = (Repex_SOC * SOC_size[l]) / ((1 + i) ** 15)
+            h2 += SOC_h2[l]  # / ((1 + i) ** e)
+            CAPEX_SOC = Capex_SOC * SOC_size[l]
+            CAPEX_tank = Capex_tank * tank_size_SOC[l]
+            CAPEX_comp = Capex_comp * comp_size_SOC[l]
+            CAPEX_wind = Capex_wind * Wind_size_SOC[l]
+            OPEX_SOC += Opex_SOC * SOC_size[l] / ((1 + i) ** e)
+            OPEX_tank += Opex_tank * tank_size_SOC[l] / ((1 + i) ** e)
+            OPEX_comp += Opex_comp * comp_size_SOC[l] / ((1 + i) ** e)
+            OPEX_wind += Opex_wind * Wind_size_SOC[l] / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH = (LCOM + CAPEX + REPEX) / (h2)
+
+                print("The CAPEX for the SOC system is: {:.2f}".format(CAPEX_SOC), "Euro")
+                print("The OPEX for the SOC system is: {:.2f}".format(OPEX_SOC), "Euro")
+                print("The REPEX for the SOC system is: {:.2f}".format(REPEX), "Euro")
+                print("The CAPEX for the wind farm is: {:.2f}".format(CAPEX_wind), "Euro")
+                print("The OPEX for the wind farm is: {:.2f}".format(OPEX_wind), "Euro")
+                print("The CAPEX for the storage tank is: {:.2f}".format(CAPEX_tank), "Euro")
+                print("The OPEX for the storage tank is: {:.2f}".format(OPEX_tank), "Euro")
+                print("The CAPEX for the compressor is: {:.2f}".format(CAPEX_comp), "Euro")
+                print("The OPEX for the compressor is: {:.2f}".format(OPEX_comp), "Euro")
+
+        return LCOCH
+
+
+    n = 20  # years
+    print(f"The LCOCH for the PEM system after 20 years is: {sommatoria(n)}")
+    print("END")
+
+    # LCOE for the LCOCH
+    def sommatoria(h):
+        LCOM1 = 0
+        LCOM = 0
+        h2 = 0
+        kw = 0
+        for e in range(1, h + 1):
+            LCOM += ((
+                                 Opex_SOC * SOC_size[l] + Opex_tank * tank_size_SOC[l] + Opex_comp * comp_size_SOC[l] + Opex_wind * Wind_size_SOC[l]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_SOC * SOC_size[l] + Capex_tank * tank_size_SOC[l] + Capex_comp * comp_size_SOC[l] + Capex_wind * Wind_size_SOC[l])
+            REPEX = (Repex_SOC * SOC_size[l]) / ((1 + i) ** 15)
+            LCOM1 += ((Opex_turbine * (MWh[l])) / ((1 + i) ** e))
+            kw += kWh[l]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOE2 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        return LCOE2
+
+
+    h = 20  # years
+    print(f"The LCOE for the SOC system with the storage after 20 years is euro/kg: {sommatoria(h)}")
+
+    # variation of LCOCH and LCOE for differents i,f,d
+    i_values = np.linspace(0.01, 0.14, 1000)
+    f_values = np.linspace(0.01, 0.12, 1000)
+    d_values = np.linspace(0, 0.025, 1000)
+
+
+    # variation of nominal interest rate
+    for i_val in i_values:
+        f = 0.0655
+        d = 0
+        i = (i_val - f) / (1 + f)
+        LCOM = 0
+        LCOM1 = 0
+        h2 = 0
+        kw = 0
+        n = 20  # years
+        for e in range(1, n + 1):
+            LCOM += ((Opex_SOC * SOC_size[l] + Opex_tank * tank_size_SOC[l] + Opex_comp * comp_size_SOC[l] + Opex_wind * Wind_size_SOC[l]) / ((1 + i) ** e))
+            CAPEX = (
+                        Capex_SOC * SOC_size[l] + Capex_tank * tank_size_SOC[l] + Capex_comp * comp_size_SOC[l] + Capex_wind * Wind_size_SOC[l])
+            REPEX = (Repex_SOC * SOC_size[l]) / ((1 + i) ** 10)
+            LCOM1 += ((Opex_turbine * (MWh[l])) / ((1 + i) ** e))
+            h2 += SOC_h2[l]  # / ((1 + i) ** e)
+            kw += kWh[l]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH1 = (LCOM + CAPEX + REPEX) / (h2)
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        if l == 0:
+            i_LCOCH5.append(LCOCH1)
+            i_LCOE5.append(LCOE1)
+        if l == 1:
+            i_LCOCH6.append(LCOCH1)
+            i_LCOE6.append(LCOE1)
+        if l == 2:
+            i_LCOCH7.append(LCOCH1)
+            i_LCOE7.append(LCOE1)
+        if l == 3:
+            i_LCOCH8.append(LCOCH1)
+            i_LCOE8.append(LCOE1)
+
+    # variation of inflation rate
+    for f_val in f_values:
+        i_nom = 0.0875
+        d = 0
+        i = (i_nom - f_val) / (1 + f_val)
+        LCOM = 0
+        LCOM1 = 0
+        h2 = 0
+        kw = 0
+        n = 20  # years
+        for e in range(1, n + 1):
+            LCOM += ((
+                                 Opex_SOC * SOC_size[l] + Opex_tank * tank_size_SOC[l] + Opex_comp * comp_size_SOC[l] + Opex_wind * Wind_size_SOC[l]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_SOC * SOC_size[l] + Capex_tank * tank_size_SOC[l] + Capex_comp * comp_size_SOC[l] + Capex_wind * Wind_size_SOC[l])
+            REPEX = (Repex_SOC * SOC_size[l]) / ((1 + i) ** 10)
+            LCOM1 += ((Opex_turbine * (MWh[l])) / ((1 + i) ** e))
+            CAPEX1 = 0
+            REPEX1 = 0
+            h2 += SOC_h2[l]  # / ((1 + i) ** e)
+            kw += kWh[l]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH1 = (LCOM + CAPEX + REPEX) / (h2)
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (kw)
+        if l == 0:
+            f_LCOCH5.append(LCOCH1)
+            f_LCOE5.append(LCOE1)
+        if l == 1:
+            f_LCOCH6.append(LCOCH1)
+            f_LCOE6.append(LCOE1)
+        if l == 2:
+            f_LCOCH7.append(LCOCH1)
+            f_LCOE7.append(LCOE1)
+        if l == 3:
+            f_LCOCH8.append(LCOCH1)
+            f_LCOE8.append(LCOE1)
+
+
+    # variation of degradation rate
+    for d_val in d_values:
+        i_nom = 0.0875
+        f = 0.0655
+        i = (i_nom - f) / (1 + f)
+        LCOM = 0
+        LCOM1 = 0
+        h2 = 0
+        kw = 0
+        n = 20  # years
+        for e in range(1, n + 1):
+            LCOM1 += ((Opex_turbine * (MWh[l])) / ((1 + i) ** e))
+            CAPEX1 = 0
+            LCOM += ((
+                                 Opex_SOC * SOC_size[l] + Opex_tank * tank_size_SOC[l] + Opex_comp * comp_size_SOC[l] + Opex_wind * Wind_size_SOC[l]) / (
+                                 (1 + i) ** e))
+            CAPEX = (
+                        Capex_SOC * SOC_size[l] + Capex_tank * tank_size_SOC[l] + Capex_comp * comp_size_SOC[l] + Capex_wind * Wind_size_SOC[l])
+            REPEX = (Repex_SOC * SOC_size[l]) / ((1 + i) ** 10)
+            h2 += SOC_h2[l]  # / ((1 + i) ** e)
+            kw += kWh[l]  # / ((1 + i) ** e)
+            if (e == 20):
+                LCOCH1 = (LCOM + CAPEX + REPEX) / ((1 - e * d_val) * (h2))
+                # print("sold",LCOH1)
+            if (e == 20):
+                LCOE1 = (LCOM1 + LCOM + CAPEX + REPEX) / (((1 - e * d_val) * (kw)))
+        if l == 0:
+            d_LCOCH5.append(LCOCH1)
+            d_LCOE5.append(LCOE1)
+        if l == 1:
+            d_LCOCH6.append(LCOCH1)
+            d_LCOE6.append(LCOE1)
+        if l == 2:
+            d_LCOCH7.append(LCOCH1)
+            d_LCOE7.append(LCOE1)
+        if l == 3:
+            d_LCOCH8.append(LCOCH1)
+            d_LCOE8.append(LCOE1)
+
+plt.plot(i_values*100, i_LCOCH5, label='10.72 MW')
+plt.plot(i_values*100, i_LCOCH6, label='13.40 MW')
+plt.plot(i_values*100, i_LCOCH7, label='16.08 MW')
+plt.plot(i_values*100, i_LCOCH8, label='32.16 MW')
+plt.xlabel('Interest rate (%)')
+plt.ylabel('LCOCH €/kg')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(f_values*100, f_LCOCH5, label='10.72 MW')
+plt.plot(f_values*100, f_LCOCH6, label='13.40 MW')
+plt.plot(f_values*100, f_LCOCH7, label='16.08 MW')
+plt.plot(f_values*100, f_LCOCH8, label='32.16 MW')
+plt.xlabel('Inflation rate (%)')
+plt.ylabel('LCOCH €/kg')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(d_values*100, d_LCOCH5, label='10.72 MW')
+plt.plot(d_values*100, d_LCOCH6, label='13.40 MW')
+plt.plot(d_values*100, d_LCOCH7, label='16.08 MW')
+plt.plot(d_values*100, d_LCOCH8, label='32.16 MW')
+plt.xlabel('Degradation rate (%)')
+plt.ylabel('LCOCH €/kg')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(i_values*100, i_LCOE5, label='10.72 MW')
+plt.plot(i_values*100, i_LCOE6, label='13.40 MW')
+plt.plot(i_values*100, i_LCOE7, label='16.08 MW')
+plt.plot(i_values*100, i_LCOE8, label='32.16 MW')
+plt.xlabel('Interest rate (%)')
+plt.ylabel('LCOE €/kWh')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(f_values*100, f_LCOE5, label='10.72 MW')
+plt.plot(f_values*100, f_LCOE6, label='13.40 MW')
+plt.plot(f_values*100, f_LCOE7, label='16.08 MW')
+plt.plot(f_values*100, f_LCOE8, label='32.16 MW')
+plt.xlabel('Inflation rate (%)')
+plt.ylabel('LCOE €/kWh')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(d_values*100, d_LCOE5, label='10.72 MW')
+plt.plot(d_values*100, d_LCOE6, label='13.40 MW')
+plt.plot(d_values*100, d_LCOE7, label='16.08 MW')
+plt.plot(d_values*100, d_LCOE8, label='32.16 MW')
+plt.xlabel('Degradation rate (%)')
+plt.ylabel('LCOE €/kWh')
+plt.title('')
+plt.legend()
+plt.grid(True)
+plt.show()
+
