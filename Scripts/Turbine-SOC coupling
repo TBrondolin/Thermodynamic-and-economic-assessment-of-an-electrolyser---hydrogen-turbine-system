@@ -1,0 +1,1734 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import CoolProp.CoolProp as CP
+import cantera as ct
+import pandas as pd
+# get the full list of species
+species = {S.name: S for S in ct.Species.list_from_file("nasa_gas.yaml")}
+# define the gas species - fuel, air, and combustion products
+complete_species = [species[S] for S in ("CH4", "H2", "O2", "N2", "CO2", "H2O")]
+gas = ct.Solution(thermo="ideal-gas", species=complete_species)
+comp = ct.Solution(thermo="ideal-gas", species=complete_species)
+entr = ct.Solution(thermo="ideal-gas", species=complete_species)
+comb = ct.Solution(thermo="ideal-gas", species=complete_species)
+turb = ct.Solution(thermo="ideal-gas", species=complete_species)
+end = ct.Solution(thermo="ideal-gas", species=complete_species)
+Hydro = ct.Solution(thermo="ideal-gas", species=complete_species)
+compH2 = ct.Solution(thermo="ideal-gas", species=complete_species)
+
+#Reaction
+#2H2 + x4.76Air(O2 + 3.76N2) → 2H2O + x3.76N2 + (x-1)O2
+#CH4 + (x * (2 * 4.76Air(O2 + 3.76N2))) → CO2 + 2H2O + (2 * x * 3.76)N2 + (2x-2)O2
+# Given values for thermodynamic cycle
+A = 1 # H2 content from 0 to 1
+B = 0 # CH4 content from 0 to 1
+P_el = 52000 #kW power of the turbine
+#molar mass
+M_CH4 = 16 #g/mol
+M_H2 = 2 #g/mol
+M_O2 = 32
+M_H20 = 18
+M_N2 = 28
+M_CO2 = 44
+#Excess air
+Phi = 2
+#Parameter for the iteration of excess air
+error = 1
+while (error>0.01) :
+   M_Air = (M_N2 * 0.79 + M_O2 * 0.21) #28.84 but with argon would be 28.96
+   M_gas = (((2 * M_H20 + Phi * 3.76 * M_N2 + (Phi - 1) * M_O2) / (2 + Phi * 3.76 + (Phi - 1))) * A) + (((1 * M_CO2 + 2 * M_H20 + Phi * 2 * 3.76 * M_N2 + (2 * Phi - 2) * M_O2) / (1 + 2 + 2 * Phi * 3.76 + (2 * Phi - 2))) * B)
+#print(M_Air)
+#print(M_gas)
+# for the reaction to burn 2H2 we need a mol of O2
+   n_air = 1 / 0.21 # number of air moles to burn 2 moles of H2
+   m_air = Phi * n_air * M_Air # g of air for 4 g of H2
+   m_H2 = (M_H2 * 2) * A
+   m_CH4 = (M_CH4 * 1) * B
+   m_FUEL = m_H2 + m_CH4
+   fuel_air = m_FUEL / m_air
+#print("Fuel air ratio {:.4f}".format(fuel_air))
+#print("Excess air {:.4f}".format(Phi))
+   # Temperature, Pressure, Pressure ratio, isentropic efficiencies of compressor and turbine (Point 1)
+   T1 = 298.15  # Inlet temperature
+   TH2 = 453.15 #180 C
+   p1 = 101.325  # Inlet pressure kPa
+   # Calculation of thermodynamics of Point 2
+   PR = 15.9
+   PR_H2 = 690
+   eta_C = 0.85
+   eta_T = 0.89
+   eta_H2 = 0.8
+   p2 = p1 * PR  # Outlet pressure
+   gas.TPX = T1, ct.one_atm, 'O2:1.0, N2:3.76'
+   S1 = gas.entropy_mass
+   comp.SPX = S1, (p2 * 1000), 'O2:1.0, N2:3.76'
+   T2s = comp.T
+   Cp_mean = ((gas.cp + comp.cp) / 2)/1000
+#print(Cp_mean)
+#print("Isentropic temperature: {:.2f}".format(T2s-273.15),"C")
+   T2 = ((T2s - T1) / eta_C) + T1
+#print("Temperature after the compressor: {:.2f}".format(T2-273.15),"C")
+   entr.TPX = T2, (p2 * 1000), 'O2:1.0, N2:3.76'
+   S2 = entr.entropy_mass
+   # Calculation of thermodynamics of Point 3
+   Ploss_comb = 0.05
+   eta_comb = 0.99
+   eta_gen = 0.98
+   p3 = (1 - Ploss_comb) * p2
+#print("Pressure after combustion: {:.2f}" .format(p3),"kPa")
+   H2_LHV = 120000 #kJ/kg
+   CH4_LHV = 50000 #kJ/kg
+
+   # First try values and iterative cycle to calculate T3
+   T3 = 1300
+   cp_gas = 1
+   cp = 0
+   while (cp_gas - cp)>1e-3:
+    cp = (((((CP.PropsSI('Cp0mass','T',T3,'P',p3,'water') * 2 * M_H20) + ((CP.PropsSI('Cp0mass','T',T3,'P',p3,'nitrogen')) * Phi * 3.76 * M_N2) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'Oxygen') * (Phi - 1) * M_O2)) / (1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass','T',T3,'P',p3,'water') * 2 * M_H20) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'CarbonDioxide') * 1 * M_CO2) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'Oxygen') * (2 * Phi - 2) * M_O2)) / (1000 * (1 + 2 + 2 * Phi * 3.76 + (2 * Phi - 2)) * M_gas) * B))
+    T3 = ((Cp_mean * (T2 - T1)) + (eta_comb * fuel_air * (H2_LHV * A + CH4_LHV * B))) / ((fuel_air + 1) * cp_gas) + T1
+    cp_gas = (((((CP.PropsSI('Cp0mass','T',T3,'P',p3,'water') * 2 * M_H20) + ((CP.PropsSI('Cp0mass','T',T3,'P',p3,'nitrogen')) * Phi * 3.76 * M_N2) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'Oxygen') * (Phi - 1) * M_O2)) / (1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass','T',T3,'P',p3,'water') * 2 * M_H20) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'CarbonDioxide') * 1 * M_CO2) + (CP.PropsSI('Cp0mass','T',T3,'P',p3,'Oxygen') * (2 * Phi - 2) * M_O2)) / (1000 * (1 + 2 + 2 * Phi * 3.76 + (2 * Phi - 2)) * M_gas) * B))
+   T3 = ((Cp_mean * (T2 - T1)) + (eta_comb * fuel_air * (H2_LHV * A + CH4_LHV * B))) / ((fuel_air + 1) * cp_gas) + T1
+#print("Temperature after the combustion: {:.2f}".format(T3),"C")
+   # Specific power of compressor
+   P_comp_ma = Cp_mean * (T2 - T1)
+#print("Power of the compressor: {:.2f}" .format(P_comp_ma),"kW")
+   p4 = p1
+#print("Pressure after turbine: {:.2f}" .format(p4),"kPa")
+   H2O_value = 2 * A + 2 * B
+   CO2_value = 1 * B
+   N2_value = Phi * 3.76 * A + 2 * Phi * 3.76 * B
+   O2_value = (Phi - 1) * A + (2 * (Phi - 1)) * B
+   H2O_string = f"H2O: {H2O_value}"
+   CO2_string = f"CO2: {CO2_value}"
+   N2_string = f"N2: {N2_value}"
+   O2_string = f"O2: {O2_value}"
+   result_string = ", ".join([H2O_string, CO2_string, N2_string, O2_string])
+   comb.TPX = T3, (p3 * 1000), result_string
+   S3 = comb.entropy_mass
+   turb.SPX = S3, (p4 * 1000), result_string
+   # Calculation of thermodynamics of Point 4
+   T4s = turb.T
+#T4s = T3 / ((p3 / p4) ** ((k_gas - 1) / k_gas)) # Outlet temperature
+#print("Isentropic temperature after turbine: {:.2f}".format(T4s-273.15),"C")
+   T4 = T3 - (eta_T * (T3 - T4s))
+   #print("Temperature after turbine: {:.2f}".format(T4 - 273.15), "C")
+   # Iterative cycle to calculate the needed excess air thus equivalence ratio
+   error = T4 - (750+273.15)
+   if error>0.001:
+    k = Phi+0.0001
+    Phi = k
+
+#print("Specific heat of the gas: {:2f}".format(cp_gas))
+EqRatio = fuel_air / (m_FUEL/(m_air/Phi))
+
+# Print the results of the thermodynamic cycle
+print("Final equivalence ratio: {:2f}".format(EqRatio))
+print("Fuel air ratio {:.4f}".format(fuel_air))
+print("Isentropic temperature: {:.2f}".format(T2s),"K")
+print("Temperature after the compressor: {:.2f}".format(T2),"K")
+print("Temperature after the combustion: {:.2f}".format(T3),"K")
+print("Pressure after combustion: {:.2f}" .format(p3),"kPa")
+print("Isentropic temperature after turbine: {:.2f}".format(T4s),"K")
+print("Temperature after turbine: {:.2f}".format(T4),"K")
+
+#Specific power for the turbine
+P_turb_mg = cp_gas * (T3 - T4)
+#print("Power of the turbine: {:.2f}" .format(P_turb_mg),"kW")
+#print("Net power: {:.3f}" .format(P_el/1000),"MW")
+#Specific power
+P_el_ma = eta_gen * (P_turb_mg * (fuel_air + 1) - P_comp_ma)
+#print("Power divided m_air: {:.4f}" .format(P_el_ma))
+# Calculation of mass of air from specific power and power
+m_a = P_el / P_el_ma
+print("m_air: {:.4f}" .format(m_a), "kg/s")
+#Density of air
+Air_d = (CP.PropsSI('D','T', T1, 'P', p1, 'air') * 1000) #kg/m3
+#print("Air density {:.4f}" .format(Air_d), "kg/m3")
+print("m_air: {:.4f}" .format(m_a/Air_d), "m3/s")
+# Fuel mass flow
+m_f = fuel_air * m_a
+#print("m_fuel: {:.4f}" .format(m_f), "kg/s")
+#Hydrogen mass flow
+m_H2 = fuel_air * m_a * A
+print("m_H2: {:.4f}" .format(m_H2), "kg/s")
+# Hydrogen density
+H2_d = (CP.PropsSI('D','T', T2, 'P', (p2*1.3), 'hydrogen') * 1000) #kg/m3
+print("H2 density {:.4f}" .format(H2_d), "kg/m3")
+print("m_H2: {:.4f}" .format(m_H2/H2_d), "m3/s")
+#Methane mass flow
+m_CH4 = fuel_air * m_a * B
+print("m_CH4: {:.4f}" .format(m_CH4), "kg/s")
+#Methane density
+CH4_d = (CP.PropsSI('D','T', T2, 'P', (p2*1.3), 'methane') * 1000) #kg/m3
+print("Fuel density {:.4f}" .format(CH4_d), "kg/m3")
+print("m_CH4: {:.4f}" .format(m_CH4/CH4_d), "m3/s")
+#Total mass and volume of the gas
+m_g = m_a + m_H2 + m_CH4
+m_gv = m_a / Air_d + m_H2 / H2_d + m_CH4 / CH4_d
+print("m_gas: {:.4f}" .format(m_g), "kg/s")
+print("m_gas: {:.4f}" .format(m_gv), "m3/s")
+#thermal yield
+eta_thermal = (P_el) / ((m_H2 * H2_LHV) + (m_CH4 * CH4_LHV))  # Thermal efficiency m_f * (H2_LHV * A + CH4_LHV * B)
+print("Thermal yield: {:.4f}" .format(eta_thermal))
+#TF = m_g * cp_gas * (T4 - T1)
+#print("Available thermal power: {:.3f}" .format(TF/1000),"MW")
+#Turbine power
+P_turb = m_g * cp_gas * (T3 - T4) * eta_gen
+print("Power of the turbine: {:.2f}" .format(P_turb),"kW")
+#Compressor power
+P_comp = m_a * Cp_mean * (T2 - T1) * eta_gen
+print("Power of the compressor: {:.2f}" .format(P_comp),"kW")
+#Net power
+P = P_turb - P_comp
+print("Power: {:.2f}" .format(P),"kW")
+#Parameter to compute later graph
+delta_v = (m_H2/H2_d) / ((m_H2/H2_d) + (m_CH4/CH4_d))
+#print(delta_v)
+end.TPX = T4, (p4 * 1000), result_string  # O2:1.0, N2:7.52, H2O:2.0
+S4 = end.entropy_mass
+
+#Graph of the thermodynamic cycle
+T_values = [T1, T2, T3, T4]
+S_values = [S1, S2, S3, S4]
+
+# Plotting the graph
+plt.plot(S_values, T_values, marker='o', linestyle='-')
+plt.title('Entropy vs Temperature')
+plt.xlabel('Entropy (kJ/kg K)')
+plt.ylabel('Temperature (K)')
+plt.grid(True)
+plt.show()
+
+# Provide the full path to the Excel file (excel with data of turbine and wind farm operation)
+path = r'C:\Users\andre\Desktop\materie\Erasmus\Articoli\Reference documents\1 Good ones\Turbine model\Turbine data\Wind-Peaker_2022.xlsx'
+# Read Excel file
+kk = pd.read_excel(path)
+
+# Solution with 1 turbine of 52 MW and an electrolyser (gas turbine that work more, unit 2 of Rhode)
+# Define empty arrays to store results
+Efficiency = 0.84 #(Efficiency is considered constant for the operation)
+LHV_H2 = 33 #Wh/kg
+Wind = []
+index = []
+Power = []
+H2 = []
+H2_mass_fraction = []
+H2_volume_fraction = []
+kg_CO2_s = []
+H2_mass_fraction1 = []
+H2_volume_fraction1 = []
+kg_CO2_s1 = []
+power = []
+kg_H2_30min = []
+storage = []
+difference = []
+steam = []
+compressed = []
+energy = []
+heat_g = []
+heat_a = []
+heat_w = []
+heat_diff = []
+heat_sto = []
+
+# Choice of the electrolyser power
+input = input("Enter system power 10720 = 4, 13400 = 5, 16080 = 6 " )
+a = int(input)
+value = a * 2680
+
+# Time series of the power and hydrogen production every half an hour from excel data Turbine unit 2 that works more
+for i in np.linspace(0, (365 * 24 * 2), (365 * 24 * 2)):
+    A = 1 #Full hydrogen operation
+    B = 0
+    h = int(i)
+    # Access value from the second column that is the power of the turbine
+    P_el = (kk.iloc[h, 2] * 1000)
+    if P_el > 52000:
+        P_el = 52000
+    #print(P_el)
+    # Access value from the first column that is the date
+    date = kk.iloc[h, 0]
+    #print(date)
+    # Wind power production
+    P = (kk.iloc[h, 1] * 1000)
+    #print(P)
+    if P>=value:
+     ElectrolyzerP = value
+    if P < value:
+     ElectrolyzerP = P
+    # Isentropic efficiency of compressor and turbine obtained from maps
+    if 0 < P_el <= 5200:
+        eta_C = ((0.8205 * A) + (0.8209 * B))
+        eta_T = ((0.8501 * A) + (0.8535 * B))
+        eta_comb = 0.9864
+    if 5200 < P_el <= 10400:
+        eta_C = (((0.8205 * A) + (0.8209 * B)) + ((0.8273 * A) + (0.8274 * B))) / 2
+        eta_T = (((0.8501 * A) + (0.8535 * B)) + ((0.866 * A) + (0.8695 * B))) / 2
+        eta_comb = 0.9868
+    if 10400 < P_el <= 15600:
+        eta_C = (((0.8273 * A) + (0.8274 * B)) + ((0.8335 * A) + (0.8337 * B))) / 2
+        eta_T = (((0.866 * A) + (0.8695 * B)) + ((0.8784 * A) + (0.8801 * B))) / 2
+        eta_comb = 0.9871
+    if 15600 < P_el <= 20800:
+        eta_C = (((0.8335 * A) + (0.8337 * B)) + ((0.8398 * A) + (0.8398 * B))) / 2
+        eta_T = (((0.8784 * A) + (0.8801 * B)) + ((0.886 * A) + (0.8874 * B))) / 2
+        eta_comb = 0.9875
+    if 20800 < P_el <= 26000:
+        eta_C = (((0.8398 * A) + (0.8398 * B)) + ((0.8435 * A) + (0.8435 * B))) / 2
+        eta_T = (((0.886 * A) + (0.8874 * B)) + ((0.892 * A) + (0.8924 * B))) / 2
+        eta_comb = 0.9879
+    if 26000 < P_el <= 31200:
+        eta_C = (((0.8435 * A) + (0.8435 * B)) + ((0.8473 * A) + (0.8473 * B))) / 2
+        eta_T = (((0.892 * A) + (0.8924 * B)) + ((0.894 * A) + (0.8939 * B))) / 2
+        eta_comb = 0.9883
+    if 31200 < P_el <= 36400:
+        eta_C = (((0.8473 * A) + (0.8473 * B)) + ((0.8496 * A) + (0.8496 * B))) / 2
+        eta_T = (((0.894 * A) + (0.8939 * B)) + ((0.8951 * A) + (0.8952 * B))) / 2
+        eta_comb = 0.9887
+    if 36400 < P_el <= 41600:
+        eta_C = (((0.8496 * A) + (0.8496 * B)) + ((0.8509 * A) + (0.8509 * B))) / 2
+        eta_T = (((0.8951 * A) + (0.8952 * B)) + ((0.8952 * A) + (0.8951 * B))) / 2
+        eta_comb = 0.9891
+    if 41600 < P_el <= 46800:
+        eta_C = (((0.8509 * A) + (0.8509 * B)) + ((0.8511 * A) + (0.8511 * B))) / 2
+        eta_T = (((0.8952 * A) + (0.8951 * B)) + ((0.8933 * A) + (0.8931 * B))) / 2
+        eta_comb = 0.9895
+    if 46800 < P_el <= 52000:
+        eta_C = (((0.8511 * A) + (0.8511 * B)) + ((0.85 * A) + (0.85 * B))) / 2
+        eta_T = (((0.8933 * A) + (0.8931 * B)) + ((0.89 * A) + (0.89 * B))) / 2
+        eta_comb = 0.99
+    # repetition of the thermodynamic cycle to calculate every parameter for every given power
+    M_Air = (M_N2 * 0.79 + M_O2 * 0.21)  # 28.84 but with argon would be 28.96
+    M_gas = (((2 * M_H20 + Phi * 3.76 * M_N2 + (Phi - 1) * M_O2) / (2 + Phi * 3.76 + (Phi - 1))) * A) + (((1 * M_CO2 + 2 * M_H20 + Phi * 2 * 3.76 * M_N2 + (2 * Phi - 2) * M_O2) / (1 + 2 + 2 * Phi * 3.76 + (2 * Phi - 2))) * B)
+    n_air = 1 / 0.21  # number of air moles to burn 2 moles of H2
+    m_air = Phi * n_air * M_Air  # g of air for 4 g of H2
+    m_H2 = (M_H2 * 2) * A
+    m_CH4 = (M_CH4 * 1) * B
+    m_fuel = m_H2 + m_CH4
+    fuel_air = m_fuel / m_air
+    #print(fuel_air)
+    # Calculation of T3 from first try values and iterations
+    T3 = 1300
+    cp_gas = 1
+    cp = 0
+    while (cp_gas - cp) > 1e-3:
+        cp = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                             CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                            1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3, 'P',
+                                                                                                p3,
+                                                                                                'water') * 2 * M_H20) + (
+                                                                                        CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                   'P', p3,
+                                                                                                   'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'Oxygen') * (
+                                                                                                           2 * Phi - 2) * M_O2)) / (
+                                                                                              1000 * (
+                                                                                                  1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                      2 * Phi - 2)) * M_gas) * B))
+        T3 = ((Cp_mean * (T2 - T1)) + (eta_comb * fuel_air * (H2_LHV * A + CH4_LHV * B))) / (
+                    (fuel_air + 1) * cp_gas) + T1
+        cp_gas = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                                 CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                                1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                    'P', p3,
+                                                                                                    'water') * 2 * M_H20) + (
+                                                                                            CP.PropsSI('Cp0mass', 'T',
+                                                                                                       T3, 'P', p3,
+                                                                                                       'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'Oxygen') * (
+                                                                                                               2 * Phi - 2) * M_O2)) / (
+                                                                                                  1000 * (
+                                                                                                      1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                          2 * Phi - 2)) * M_gas) * B))
+
+    H2O_value = 2 * A + 2 * B
+    CO2_value = 1 * B
+    N2_value = Phi * 3.76 * A + 2 * Phi * 3.76 * B
+    O2_value = (Phi - 1) * A + (2 * (Phi - 1)) * B
+    H2O_string = f"H2O: {H2O_value}"
+    CO2_string = f"CO2: {CO2_value}"
+    N2_string = f"N2: {N2_value}"
+    O2_string = f"O2: {O2_value}"
+    # Composition of flue gas after the combustion that varies depending on the fuel and the quantity
+    result_string = ", ".join([H2O_string, CO2_string, N2_string, O2_string])
+    comb.TPX = T3, (p3 * 1000), result_string
+    S3 = comb.entropy_mass
+    turb.SPX = S3, (p4 * 1000), result_string
+    T4s = turb.T
+    T4 = T3 - (eta_T * (T3 - T4s))
+    P_turb_mg = cp_gas * (T3 - T4)
+    P_el_ma = eta_gen * (P_turb_mg * (fuel_air + 1) - P_comp_ma)
+    m_a = P_el / P_el_ma
+    Air_d = (CP.PropsSI('D', 'T', T1, 'P', p1, 'air') * 1000)  # kg/m3
+    m_f = fuel_air * m_a
+    # print("m_fuel: {:.4f}" .format(m_f), "kg/s")
+    m_H2 = fuel_air * m_a * A
+    #print("m_H2: {:.4f}".format(m_H2), "kg/s")
+    H2_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'hydrogen') * 1000)  # kg/m3
+    # print("H2 density {:.4f}" .format(H2_d), "kg/m3")
+    #print("m_H2: {:.4f}".format(m_H2 / H2_d), "m3/s")
+    m_CH4 = fuel_air * m_a * B
+    #print("m_CH4: {:.4f}".format(m_CH4), "kg/s")
+    CH4_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'methane') * 1000)  # kg/m3
+    # print("Fuel density {:.4f}" .format(CH4_d), "kg/m3")
+    #print("m_CH4: {:.4f}".format(m_CH4 / CH4_d), "m3/s")
+    m_g = m_a + m_H2 + m_CH4
+    # Water mass flow rate obtained from the technical sheet
+    m_water = (a * 860)/3600
+    Pep = P_el
+    # kg each half an hour of hydrogen needed to operate the turbine
+    kg = m_H2 * 60 * 30
+    # kg each half an hour of hydrogen produced by the electrolyser
+    Hydrogen = (ElectrolyzerP * Efficiency / LHV_H2) / 2
+    # kg each half an hour of water demand of the electrolyser
+    Water = (Hydrogen / (M_H2 * 2)) * (2 * M_H20)
+    # Difference of hydrogen production and demand every half an hour
+    ai = (Hydrogen - kg) / 1000
+    ei = 0
+    if ai > 0:
+        ei = ai # If the difference is positive it means the hydrogen is stored
+    # Specific heat of the gas for every 100 C to have a good approximation
+    cp_gas_1023 = ((CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                    CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                       1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_923 = ((CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_823 = ((CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_723 = ((CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_623 = ((CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_523 = ((CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_473 = ((CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_423 = ((CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+
+    #If high T gas considered change 423 with 473 and put 50 instead of 100
+    gas_h = m_g * ((((cp_gas_423+cp_gas_523)/2*100)) + (((cp_gas_523+cp_gas_623)/2*100)) + (((cp_gas_623+cp_gas_723)/2*100)) + (((cp_gas_723+cp_gas_823)/2*100)) + (((cp_gas_823+cp_gas_923)/2*100)) + (((cp_gas_923+cp_gas_1023)/2*100))) #m_g * (((1.0709+1.0883)/2*100) + ((1.0883+1.1115)/2*100) + ((1.1115+1.1377)/2*100) + ((1.1377+1.1643)/2*100) + ((1.1643+1.1896)/2*100) + ((1.1896+1.1915)/2*50)+((1.0683+1.0709)/2*100))
+    # heat needed to heat the air (obtained from formulae on SOC code)
+    air_h = 458 * a #This is the value to keep it running in design condition from the electrolyzer model
+    # heat for the water to increase T from 25 to 200 C
+    # Saturated vapor enthalpy of Water at 1 atm in J/kg
+    H_V = CP.PropsSI('H', 'P', 101325, 'Q', 1, 'Water');  # print(H_V) 2675529.3255007486
+
+    # Saturated liquid enthalpy of Water at 1 atm in J/kg
+    H_L = CP.PropsSI('H', 'P', 101325, 'Q', 0, 'Water');  # print(H_L) 419057.7330940691
+
+    # Latent heat of vaporization of Water at 1 atm in kJ/kg
+    r = (H_V - H_L) / 1000  # 2256.4715924066794
+    qvap = r * m_water
+
+    cp_water_293 = (CP.PropsSI('Cp0mass', 'T', 293.15, 'P', p1, 'water')) / 1000
+    cp_water_373 = (CP.PropsSI('Cp0mass', 'T', 373.15, 'P', p1, 'water')) / 1000
+    cp_water_423 = (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p1, 'water')) / 1000
+    cp_water_473 = (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p1, 'water')) / 1000
+    qsens = m_water * ((cp_water_293+cp_water_373)/2 * 80 + (cp_water_373+cp_water_423)/2 * 50) #+ (cp_water_373+cp_water_423)/2 * 50
+
+    water_h = (qvap + qsens)
+    # Heat difference between available and required every half an hour
+    df = gas_h - (water_h+air_h) #change the term of the requirement to get partial demand
+    # Storing values
+    kg_H2_30min.append(kg)
+    index.append(date)
+    Wind.append(P)
+    Power.append(ElectrolyzerP)
+    H2.append(Hydrogen)
+    steam.append(Water)
+    difference.append(ai)
+    # Sum of all the difference every half an hour to obtain the overall trend for the hydrogen
+    bi = sum(difference)
+    storage.append(bi)
+    compressed.append(ei)
+    heat_g.append(gas_h/1000)
+    heat_a.append(air_h/1000)
+    heat_w.append(water_h/1000)
+    heat_diff.append(df/1000)
+    # Sum of all the difference every half an hour to obtain the overall trend for the heat demand
+    ki = sum(heat_diff)
+    heat_sto.append(ki/(2*1000)) #GWh
+    #Hydrogen compressor calculation to find the power
+    p_H2 = p1 * PR_H2  # Outlet pressure
+    #print(p_H2)
+    Hydro.TPX = TH2, (p_H2 * 1000), 'H2:1.0'
+    S1 = Hydro.entropy_mass
+    compH2.SPX = S1, (p_H2 * 1000), 'H2:1.0'
+    TH2s = comp.T
+    Cp_meanH2 = ((Hydro.cp + compH2.cp) / 2) / 1000
+    #print(Cp_meanH2)
+    TH22 = ((TH2s - TH2) / eta_H2) + TH2
+    #P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
+    #print(ei * 1000/(60*30))
+    #print(P)
+    #E = ei * 1000 / (60 * 30) * Cp_meanH2 * (TH22 - TH2) * 60 * 30 / 2 #kWh
+    #print(E)
+    #energy.append(P)
+#maxim = max(compressed)
+#print("Maximum flow rate: {:2f} kg/s".format(maxim*1000/(60*30)))
+#en = sum(energy)
+#print("Total energy in a year: {:2f}".format(en))
+
+#printing of results
+compr = sum(compressed)
+print("Total hydrogen ton compressed in a year: {:2f}".format(compr))
+total_sum = sum(kg_H2_30min)
+print("Total hydrogen ton required in a year: {:2f}".format(total_sum/1000))
+total_g = sum(heat_g)/2
+print("Total MWht gas in a year: {:2f}".format(total_g))
+total_a = sum(heat_a)/2
+print("Total MWht air in a year: {:2f}".format(total_a))
+total_w = sum(heat_w)/2
+print("Total MWht water in a year: {:2f}".format(total_w))
+
+# Plotting the graph of heat available
+plt.plot(index, heat_g, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat available')
+plt.xlabel('Days')
+plt.ylabel('Heat available from flue gases MW')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of heat difference
+plt.plot(index, heat_diff, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat difference to run the system')
+plt.xlabel('Days')
+plt.ylabel('Heat difference between flue gases and system MW ')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the heat storage
+plt.plot(index, heat_sto, marker='', linestyle='-')
+plt.title('Heat storage trend')
+plt.xlabel('Days')
+plt.ylabel('Cumulative heat difference GWh')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the compressor power and operation
+plt.plot(index, energy, marker='', linestyle='-')
+plt.title('kW of the compressor operation every 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('Compressor power demand kW')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of hydrogen requirement
+plt.plot(index, kg_H2_30min, marker='', linestyle='-')
+plt.title('kg of H2 each 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('kg of H2 to power the turbines')
+plt.grid(True)
+plt.show()
+
+total_sum2 = sum(H2)
+print("Total hydrogen ton produced in a year: {:2f}".format(total_sum2/1000))
+
+# Plotting the graph for the hydrogen difference every half an hour
+plt.plot(index, difference, marker='', linestyle='-')
+plt.title('Hydrogen ton difference for each half an hour')
+plt.xlabel('Days')
+plt.ylabel('Kg of H2 difference in ton')
+plt.grid(True)
+plt.show()
+
+# Hydrogen storage size found on the maximum value obtained in the cumulative difference
+size = max(storage)
+minim = min(storage)
+print("Hydrogen storage size: {:2f} ton".format(size))
+print("Hydrogen storage deficit: {:2f} ton".format(minim))
+#hydrogen density
+H2_d = (CP.PropsSI('D','T', 180+273 , 'P', 7000, 'hydrogen') * 1000) #kg/m3
+print("H2 density: {:.4f} kg/m3".format(H2_d))
+print("Hydrogen storage size m3: {:2f}".format(size*1000/H2_d))
+
+# Plotting the graph for the storage trend (cumulative difference)
+plt.plot(index, storage, marker='', linestyle='-')
+plt.title('Hydrogen plot on time')
+plt.xlabel('Days')
+plt.ylabel('H2 produced in ton')
+plt.grid(True)
+plt.show()
+
+# Solution with turbine n.1 of 52 MW and an electrolyser (turbine unit 1 that works less)
+Efficiency = 0.84
+LHV_H2 = 33 #Wh/kg
+Wind = []
+index = []
+Power = []
+H2 = []
+H2_mass_fraction = []
+H2_volume_fraction = []
+kg_CO2_s = []
+H2_mass_fraction1 = []
+H2_volume_fraction1 = []
+kg_CO2_s1 = []
+power = []
+kg_H2_30min = []
+storage = []
+difference = []
+steam = []
+compressed = []
+energy = []
+heat_g = []
+heat_a = []
+heat_w = []
+heat_diff = []
+heat_sto = []
+for i in np.linspace(0, (365 * 24 * 2), (365 * 24 * 2)):
+    A = 1
+    B = 0
+    h = int(i)
+    # Access value from the second column that is the power of the turbine
+    P_el = (kk.iloc[h, 3] * 1000)
+    if P_el > 52000:
+        P_el = 52000
+    #print(P_el)
+    # Access value from the first column that is the date
+    date = kk.iloc[h, 0]
+    #print(date)
+    # Wind power production
+    P = (kk.iloc[h, 1] * 1000)
+    #print(P)
+    if P>=value:
+     ElectrolyzerP = value
+    if P < value:
+     ElectrolyzerP = P
+    # Isentropic efficiency of compressor and turbine obtained from maps
+    if 0 < P_el <= 5200:
+        eta_C = ((0.8205 * A) + (0.8209 * B))
+        eta_T = ((0.8501 * A) + (0.8535 * B))
+        eta_comb = 0.9864
+    if 5200 < P_el <= 10400:
+        eta_C = (((0.8205 * A) + (0.8209 * B)) + ((0.8273 * A) + (0.8274 * B))) / 2
+        eta_T = (((0.8501 * A) + (0.8535 * B)) + ((0.866 * A) + (0.8695 * B))) / 2
+        eta_comb = 0.9868
+    if 10400 < P_el <= 15600:
+        eta_C = (((0.8273 * A) + (0.8274 * B)) + ((0.8335 * A) + (0.8337 * B))) / 2
+        eta_T = (((0.866 * A) + (0.8695 * B)) + ((0.8784 * A) + (0.8801 * B))) / 2
+        eta_comb = 0.9871
+    if 15600 < P_el <= 20800:
+        eta_C = (((0.8335 * A) + (0.8337 * B)) + ((0.8398 * A) + (0.8398 * B))) / 2
+        eta_T = (((0.8784 * A) + (0.8801 * B)) + ((0.886 * A) + (0.8874 * B))) / 2
+        eta_comb = 0.9875
+    if 20800 < P_el <= 26000:
+        eta_C = (((0.8398 * A) + (0.8398 * B)) + ((0.8435 * A) + (0.8435 * B))) / 2
+        eta_T = (((0.886 * A) + (0.8874 * B)) + ((0.892 * A) + (0.8924 * B))) / 2
+        eta_comb = 0.9879
+    if 26000 < P_el <= 31200:
+        eta_C = (((0.8435 * A) + (0.8435 * B)) + ((0.8473 * A) + (0.8473 * B))) / 2
+        eta_T = (((0.892 * A) + (0.8924 * B)) + ((0.894 * A) + (0.8939 * B))) / 2
+        eta_comb = 0.9883
+    if 31200 < P_el <= 36400:
+        eta_C = (((0.8473 * A) + (0.8473 * B)) + ((0.8496 * A) + (0.8496 * B))) / 2
+        eta_T = (((0.894 * A) + (0.8939 * B)) + ((0.8951 * A) + (0.8952 * B))) / 2
+        eta_comb = 0.9887
+    if 36400 < P_el <= 41600:
+        eta_C = (((0.8496 * A) + (0.8496 * B)) + ((0.8509 * A) + (0.8509 * B))) / 2
+        eta_T = (((0.8951 * A) + (0.8952 * B)) + ((0.8952 * A) + (0.8951 * B))) / 2
+        eta_comb = 0.9891
+    if 41600 < P_el <= 46800:
+        eta_C = (((0.8509 * A) + (0.8509 * B)) + ((0.8511 * A) + (0.8511 * B))) / 2
+        eta_T = (((0.8952 * A) + (0.8951 * B)) + ((0.8933 * A) + (0.8931 * B))) / 2
+        eta_comb = 0.9895
+    if 46800 < P_el <= 52000:
+        eta_C = (((0.8511 * A) + (0.8511 * B)) + ((0.85 * A) + (0.85 * B))) / 2
+        eta_T = (((0.8933 * A) + (0.8931 * B)) + ((0.89 * A) + (0.89 * B))) / 2
+        eta_comb = 0.99
+    # repetition of the thermodynamic cycle to calculate every parameter for every given power
+    M_Air = (M_N2 * 0.79 + M_O2 * 0.21)  # 28.84 but with argon would be 28.96
+    M_gas = (((2 * M_H20 + Phi * 3.76 * M_N2 + (Phi - 1) * M_O2) / (2 + Phi * 3.76 + (Phi - 1))) * A) + (((1 * M_CO2 + 2 * M_H20 + Phi * 2 * 3.76 * M_N2 + (2 * Phi - 2) * M_O2) / (1 + 2 + 2 * Phi * 3.76 + (2 * Phi - 2))) * B)
+    n_air = 1 / 0.21  # number of air moles to burn 2 moles of H2
+    m_air = Phi * n_air * M_Air  # g of air for 4 g of H2
+    m_H2 = (M_H2 * 2) * A
+    m_CH4 = (M_CH4 * 1) * B
+    m_fuel = m_H2 + m_CH4
+    fuel_air = m_fuel / m_air
+    #print(fuel_air)
+    # Calculation of T3 from first try values and iterations
+    T3 = 1300
+    cp_gas = 1
+    cp = 0
+    while (cp_gas - cp) > 1e-3:
+        cp = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                             CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                            1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3, 'P',
+                                                                                                p3,
+                                                                                                'water') * 2 * M_H20) + (
+                                                                                        CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                   'P', p3,
+                                                                                                   'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'Oxygen') * (
+                                                                                                           2 * Phi - 2) * M_O2)) / (
+                                                                                              1000 * (
+                                                                                                  1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                      2 * Phi - 2)) * M_gas) * B))
+        T3 = ((Cp_mean * (T2 - T1)) + (eta_comb * fuel_air * (H2_LHV * A + CH4_LHV * B))) / (
+                    (fuel_air + 1) * cp_gas) + T1
+        cp_gas = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                                 CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                                1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                    'P', p3,
+                                                                                                    'water') * 2 * M_H20) + (
+                                                                                            CP.PropsSI('Cp0mass', 'T',
+                                                                                                       T3, 'P', p3,
+                                                                                                       'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'Oxygen') * (
+                                                                                                               2 * Phi - 2) * M_O2)) / (
+                                                                                                  1000 * (
+                                                                                                      1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                          2 * Phi - 2)) * M_gas) * B))
+
+    H2O_value = 2 * A + 2 * B
+    CO2_value = 1 * B
+    N2_value = Phi * 3.76 * A + 2 * Phi * 3.76 * B
+    O2_value = (Phi - 1) * A + (2 * (Phi - 1)) * B
+    H2O_string = f"H2O: {H2O_value}"
+    CO2_string = f"CO2: {CO2_value}"
+    N2_string = f"N2: {N2_value}"
+    O2_string = f"O2: {O2_value}"
+    # Composition of flue gas after the combustion that varies depending on the fuel and the quantity
+    result_string = ", ".join([H2O_string, CO2_string, N2_string, O2_string])
+    comb.TPX = T3, (p3 * 1000), result_string
+    S3 = comb.entropy_mass
+    turb.SPX = S3, (p4 * 1000), result_string
+    T4s = turb.T
+    T4 = T3 - (eta_T * (T3 - T4s))
+    P_turb_mg = cp_gas * (T3 - T4)
+    P_el_ma = eta_gen * (P_turb_mg * (fuel_air + 1) - P_comp_ma)
+    m_a = P_el / P_el_ma
+    Air_d = (CP.PropsSI('D', 'T', T1, 'P', p1, 'air') * 1000)  # kg/m3
+    m_f = fuel_air * m_a
+    # print("m_fuel: {:.4f}" .format(m_f), "kg/s")
+    m_H2 = fuel_air * m_a * A
+    #print("m_H2: {:.4f}".format(m_H2), "kg/s")
+    H2_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'hydrogen') * 1000)  # kg/m3
+    # print("H2 density {:.4f}" .format(H2_d), "kg/m3")
+    #print("m_H2: {:.4f}".format(m_H2 / H2_d), "m3/s")
+    m_CH4 = fuel_air * m_a * B
+    #print("m_CH4: {:.4f}".format(m_CH4), "kg/s")
+    CH4_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'methane') * 1000)  # kg/m3
+    # print("Fuel density {:.4f}" .format(CH4_d), "kg/m3")
+    #print("m_CH4: {:.4f}".format(m_CH4 / CH4_d), "m3/s")
+    m_g = m_a + m_H2 + m_CH4
+    # Water mass flow rate obtained from the technical sheet
+    m_water = (a * 860)/3600
+    Pep = P_el
+    # kg each half an hour of hydrogen needed to operate the turbine
+    kg = m_H2 * 60 * 30
+    # kg each half an hour of hydrogen produced by the electrolyser
+    Hydrogen = (ElectrolyzerP * Efficiency / LHV_H2) / 2
+    # kg each half an hour of water demand of the electrolyser
+    Water = (Hydrogen / (M_H2 * 2)) * (2 * M_H20)
+    # Difference of hydrogen production and demand every half an hour
+    ai = (Hydrogen - kg) / 1000
+    ei = 0
+    if ai > 0:
+        ei = ai # If the difference is positive it means the hydrogen is stored
+    # Specific heat of the gas multiplied by flow rate to obtain heat flux
+    cp_gas_1023 = ((CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                    CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                       1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_923 = ((CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_823 = ((CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_723 = ((CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_623 = ((CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_523 = ((CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_473 = ((CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_423 = ((CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+
+    #If high T gas considered change 423 with 473 and put 50 instead of 100
+    gas_h = m_g * ((((cp_gas_423+cp_gas_523)/2*100)) + (((cp_gas_523+cp_gas_623)/2*100)) + (((cp_gas_623+cp_gas_723)/2*100)) + (((cp_gas_723+cp_gas_823)/2*100)) + (((cp_gas_823+cp_gas_923)/2*100)) + (((cp_gas_923+cp_gas_1023)/2*100))) #m_g * (((1.0709+1.0883)/2*100) + ((1.0883+1.1115)/2*100) + ((1.1115+1.1377)/2*100) + ((1.1377+1.1643)/2*100) + ((1.1643+1.1896)/2*100) + ((1.1896+1.1915)/2*50)+((1.0683+1.0709)/2*100))
+    # heat needed to heat the air
+    air_h = 458 * a #This is the value to keep it running in design condition from the electrolyzer model
+    # heat for the water to increase T from 25 to 200 C
+    # Saturated vapor enthalpy of Water at 1 atm in J/kg
+    H_V = CP.PropsSI('H', 'P', 101325, 'Q', 1, 'Water');  # print(H_V) 2675529.3255007486
+
+    # Saturated liquid enthalpy of Water at 1 atm in J/kg
+    H_L = CP.PropsSI('H', 'P', 101325, 'Q', 0, 'Water');  # print(H_L) 419057.7330940691
+
+    # Latent heat of vaporization of Water at 1 atm in kJ/kg
+    r = (H_V - H_L) / 1000  # 2256.4715924066794
+    qvap = r * m_water
+
+    cp_water_293 = (CP.PropsSI('Cp0mass', 'T', 293.15, 'P', p1, 'water')) / 1000
+    cp_water_373 = (CP.PropsSI('Cp0mass', 'T', 373.15, 'P', p1, 'water')) / 1000
+    cp_water_423 = (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p1, 'water')) / 1000
+    cp_water_473 = (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p1, 'water')) / 1000
+    qsens = m_water * ((cp_water_293+cp_water_373)/2 * 80 + (cp_water_373+cp_water_423)/2 * 50) #+ (cp_water_373+cp_water_423)/2 * 50
+
+    water_h = (qvap + qsens)
+    # Heat difference between available and required every half an hour
+    df = gas_h - (water_h+air_h)
+    # Storing values
+    kg_H2_30min.append(kg)
+    index.append(date)
+    Wind.append(P)
+    Power.append(ElectrolyzerP)
+    H2.append(Hydrogen)
+    steam.append(Water)
+    difference.append(ai)
+    # Sum of all the difference every half an hour to obtain the overall trend for the hydrogen
+    bi = sum(difference)
+    storage.append(bi)
+    compressed.append(ei)
+    heat_g.append(gas_h/1000)
+    heat_a.append(air_h/1000)
+    heat_w.append(water_h/1000)
+    heat_diff.append(df/1000)
+    # Sum of all the difference every half an hour to obtain the overall trend for the heat demand
+    ki = sum(heat_diff)
+    heat_sto.append(ki/(2*1000)) #GWh
+    #Hydrogen compressor calculation to find the power
+    p_H2 = p1 * PR_H2  # Outlet pressure
+    #print(p_H2)
+    Hydro.TPX = TH2, (p_H2 * 1000), 'H2:1.0'
+    S1 = Hydro.entropy_mass
+    compH2.SPX = S1, (p_H2 * 1000), 'H2:1.0'
+    TH2s = comp.T
+    Cp_meanH2 = ((Hydro.cp + compH2.cp) / 2) / 1000
+    #print(Cp_meanH2)
+    TH22 = ((TH2s - TH2) / eta_H2) + TH2
+    P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
+    #print(ei * 1000/(60*30))
+    #print(P)
+    #E = ei * 1000 / (60 * 30) * Cp_meanH2 * (TH22 - TH2) * 60 * 30 / 2 #kWh
+    #print(E)
+    energy.append(P)
+#maxim = max(compressed)
+#print("Maximum flow rate: {:2f} kg/s".format(maxim*1000/(60*30)))
+#en = sum(energy)
+#print("Total energy in a year: {:2f}".format(en))
+
+#printing of results
+compr = sum(compressed)
+print("Total hydrogen ton compressed in a year: {:2f}".format(compr))
+total_sum = sum(kg_H2_30min)
+print("Total hydrogen ton required in a year: {:2f}".format(total_sum/1000))
+total_g = sum(heat_g)
+print("Total kWt gas in a year: {:2f}".format(total_g))
+total_a = sum(heat_a)
+print("Total kWt air in a year: {:2f}".format(total_a))
+total_w = sum(heat_w)
+print("Total kWt water in a year: {:2f}".format(total_w))
+
+# Plotting the graph of heat available
+plt.plot(index, heat_g, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat available')
+plt.xlabel('Days')
+plt.ylabel('Heat available from flue gases MW')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of heat difference
+plt.plot(index, heat_diff, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat difference to run the system')
+plt.xlabel('Days')
+plt.ylabel('Heat difference between flue gases and system MW ')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the heat storage
+plt.plot(index, heat_sto, marker='', linestyle='-')
+plt.title('Heat storage trend')
+plt.xlabel('Days')
+plt.ylabel('Cumulative heat difference GWh')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the compressor power and operation
+plt.plot(index, energy, marker='', linestyle='-')
+plt.title('kW of the compressor operation every 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('Compressor power demand kW')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of hydrogen requirement
+plt.plot(index, kg_H2_30min, marker='', linestyle='-')
+plt.title('kg of H2 each 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('kg of H2 to power the turbines')
+plt.grid(True)
+plt.show()
+
+total_sum2 = sum(H2)
+print("Total hydrogen ton produced in a year: {:2f}".format(total_sum2/1000))
+
+# Plotting the graph for the hydrogen difference every half an hour
+plt.plot(index, difference, marker='', linestyle='-')
+plt.title('Hydrogen ton difference for each half an hour')
+plt.xlabel('Days')
+plt.ylabel('Kg of H2 difference in ton')
+plt.grid(True)
+plt.show()
+
+# Hydrogen storage size found on the maximum value obtained in the cumulative difference
+size = max(storage)
+print("Hydrogen storage size: {:2f} ton".format(size))
+
+#hydrogen density
+H2_d = (CP.PropsSI('D','T', 180+273 , 'P', 7000, 'hydrogen') * 1000) #kg/m3
+print("H2 density: {:.4f} kg/m3".format(H2_d))
+print("Hydrogen storage size m3: {:2f}".format(size*1000/H2_d))
+
+# Plotting the graph for the storage trend (cumulative difference)
+plt.plot(index, storage, marker='', linestyle='-')
+plt.title('Hydrogen plot on time')
+plt.xlabel('Days')
+plt.ylabel('H2 produced in ton')
+plt.grid(True)
+plt.show()
+
+
+# Electrolyzer of 31.2 MW with 2 turbines of 52 MW
+valuetot = 2680 * 12
+Efficiency = 0.84
+LHV_H2 = 33 #Wh/kg
+Wind = []
+index = []
+Power = []
+H2 = []
+H2_mass_fraction = []
+H2_volume_fraction = []
+kg_CO2_s = []
+H2_mass_fraction1 = []
+H2_volume_fraction1 = []
+kg_CO2_s1 = []
+power = []
+kg_H2_30min = []
+storage = []
+difference = []
+steam = []
+compressed = []
+energy = []
+heat_g = []
+heat_a = []
+heat_w = []
+heat_diff = []
+heat_sto = []
+for i in np.linspace(0, (365 * 24 * 2), (365 * 24 * 2)):
+    A = 1
+    B = 0
+    h = int(i)
+    # Values for power of the turbine column 2 and 3
+    P_el_1 = (kk.iloc[h, 2] * 1000)
+    P_el_2 = (kk.iloc[h, 3] * 1000)
+    if P_el_1 > 52000:
+        P_el_2 = 52000
+    if P_el_1 > 52000:
+        P_el_2 = 52000
+    #print(P_el)
+    # Values for the date column 2 and 3
+    date = kk.iloc[h, 0]
+    #print(date)
+    # Wind farm production
+    P = (kk.iloc[h, 1] * 1000)
+    #print(P)
+    if P>=valuetot:
+     ElectrolyzerP = valuetot
+    if P < valuetot:
+     ElectrolyzerP = P
+
+    # Isentropic efficiency of compressor and turbine obtained from maps
+    if 0 < P_el_1 <= 5200:
+        eta_C = ((0.8205 * A) + (0.8209 * B))
+        eta_T = ((0.8501 * A) + (0.8535 * B))
+        eta_comb = 0.9864
+    if 5200 < P_el_1 <= 10400:
+        eta_C = (((0.8205 * A) + (0.8209 * B)) + ((0.8273 * A) + (0.8274 * B))) / 2
+        eta_T = (((0.8501 * A) + (0.8535 * B)) + ((0.866 * A) + (0.8695 * B))) / 2
+        eta_comb = 0.9868
+    if 10400 < P_el_1 <= 15600:
+        eta_C = (((0.8273 * A) + (0.8274 * B)) + ((0.8335 * A) + (0.8337 * B))) / 2
+        eta_T = (((0.866 * A) + (0.8695 * B)) + ((0.8784 * A) + (0.8801 * B))) / 2
+        eta_comb = 0.9871
+    if 15600 < P_el_1 <= 20800:
+        eta_C = (((0.8335 * A) + (0.8337 * B)) + ((0.8398 * A) + (0.8398 * B))) / 2
+        eta_T = (((0.8784 * A) + (0.8801 * B)) + ((0.886 * A) + (0.8874 * B))) / 2
+        eta_comb = 0.9875
+    if 20800 < P_el_1 <= 26000:
+        eta_C = (((0.8398 * A) + (0.8398 * B)) + ((0.8435 * A) + (0.8435 * B))) / 2
+        eta_T = (((0.886 * A) + (0.8874 * B)) + ((0.892 * A) + (0.8924 * B))) / 2
+        eta_comb = 0.9879
+    if 26000 < P_el_1 <= 31200:
+        eta_C = (((0.8435 * A) + (0.8435 * B)) + ((0.8473 * A) + (0.8473 * B))) / 2
+        eta_T = (((0.892 * A) + (0.8924 * B)) + ((0.894 * A) + (0.8939 * B))) / 2
+        eta_comb = 0.9883
+    if 31200 < P_el_1 <= 36400:
+        eta_C = (((0.8473 * A) + (0.8473 * B)) + ((0.8496 * A) + (0.8496 * B))) / 2
+        eta_T = (((0.894 * A) + (0.8939 * B)) + ((0.8951 * A) + (0.8952 * B))) / 2
+        eta_comb = 0.9887
+    if 36400 < P_el_1 <= 41600:
+        eta_C = (((0.8496 * A) + (0.8496 * B)) + ((0.8509 * A) + (0.8509 * B))) / 2
+        eta_T = (((0.8951 * A) + (0.8952 * B)) + ((0.8952 * A) + (0.8951 * B))) / 2
+        eta_comb = 0.9891
+    if 41600 < P_el_1 <= 46800:
+        eta_C = (((0.8509 * A) + (0.8509 * B)) + ((0.8511 * A) + (0.8511 * B))) / 2
+        eta_T = (((0.8952 * A) + (0.8951 * B)) + ((0.8933 * A) + (0.8931 * B))) / 2
+        eta_comb = 0.9895
+    if 46800 < P_el_1 <= 52000:
+        eta_C = (((0.8511 * A) + (0.8511 * B)) + ((0.85 * A) + (0.85 * B))) / 2
+        eta_T = (((0.8933 * A) + (0.8931 * B)) + ((0.89 * A) + (0.89 * B))) / 2
+        eta_comb = 0.99
+
+    if 0 < P_el_2 <= 5200:
+        eta_C = ((0.8205 * A) + (0.8209 * B))
+        eta_T = ((0.8501 * A) + (0.8535 * B))
+        eta_comb = 0.9864
+    if 5200 < P_el_2 <= 10400:
+        eta_C = (((0.8205 * A) + (0.8209 * B)) + ((0.8273 * A) + (0.8274 * B))) / 2
+        eta_T = (((0.8501 * A) + (0.8535 * B)) + ((0.866 * A) + (0.8695 * B))) / 2
+        eta_comb = 0.9868
+    if 10400 < P_el_2 <= 15600:
+        eta_C = (((0.8273 * A) + (0.8274 * B)) + ((0.8335 * A) + (0.8337 * B))) / 2
+        eta_T = (((0.866 * A) + (0.8695 * B)) + ((0.8784 * A) + (0.8801 * B))) / 2
+        eta_comb = 0.9871
+    if 15600 < P_el_2 <= 20800:
+        eta_C = (((0.8335 * A) + (0.8337 * B)) + ((0.8398 * A) + (0.8398 * B))) / 2
+        eta_T = (((0.8784 * A) + (0.8801 * B)) + ((0.886 * A) + (0.8874 * B))) / 2
+        eta_comb = 0.9875
+    if 20800 < P_el_2 <= 26000:
+        eta_C = (((0.8398 * A) + (0.8398 * B)) + ((0.8435 * A) + (0.8435 * B))) / 2
+        eta_T = (((0.886 * A) + (0.8874 * B)) + ((0.892 * A) + (0.8924 * B))) / 2
+        eta_comb = 0.9879
+    if 26000 < P_el_2 <= 31200:
+        eta_C = (((0.8435 * A) + (0.8435 * B)) + ((0.8473 * A) + (0.8473 * B))) / 2
+        eta_T = (((0.892 * A) + (0.8924 * B)) + ((0.894 * A) + (0.8939 * B))) / 2
+        eta_comb = 0.9883
+    if 31200 < P_el_2 <= 36400:
+        eta_C = (((0.8473 * A) + (0.8473 * B)) + ((0.8496 * A) + (0.8496 * B))) / 2
+        eta_T = (((0.894 * A) + (0.8939 * B)) + ((0.8951 * A) + (0.8952 * B))) / 2
+        eta_comb = 0.9887
+    if 36400 < P_el_2 <= 41600:
+        eta_C = (((0.8496 * A) + (0.8496 * B)) + ((0.8509 * A) + (0.8509 * B))) / 2
+        eta_T = (((0.8951 * A) + (0.8952 * B)) + ((0.8952 * A) + (0.8951 * B))) / 2
+        eta_comb = 0.9891
+    if 41600 < P_el_2 <= 46800:
+        eta_C = (((0.8509 * A) + (0.8509 * B)) + ((0.8511 * A) + (0.8511 * B))) / 2
+        eta_T = (((0.8952 * A) + (0.8951 * B)) + ((0.8933 * A) + (0.8931 * B))) / 2
+        eta_comb = 0.9895
+    if 46800 < P_el_2 <= 52000:
+        eta_C = (((0.8511 * A) + (0.8511 * B)) + ((0.85 * A) + (0.85 * B))) / 2
+        eta_T = (((0.8933 * A) + (0.8931 * B)) + ((0.89 * A) + (0.89 * B))) / 2
+        eta_comb = 0.99
+
+    # repetition of the thermodynamic cycle to calculate every parameter for every given power
+    M_Air = (M_N2 * 0.79 + M_O2 * 0.21)  # 28.84 but with argon would be 28.96
+    M_gas = (((2 * M_H20 + Phi * 3.76 * M_N2 + (Phi - 1) * M_O2) / (2 + Phi * 3.76 + (Phi - 1))) * A) + (((1 * M_CO2 + 2 * M_H20 + Phi * 2 * 3.76 * M_N2 + (2 * Phi - 2) * M_O2) / (1 + 2 + 2 * Phi * 3.76 + (2 * Phi - 2))) * B)
+    n_air = 1 / 0.21  # number of air moles to burn 2 moles of H2
+    m_air = Phi * n_air * M_Air  # g of air for 4 g of H2
+    m_H2 = (M_H2 * 2) * A
+    m_CH4 = (M_CH4 * 1) * B
+    m_fuel = m_H2 + m_CH4
+    fuel_air = m_fuel / m_air
+    #print(fuel_air)
+    # Calculation of T3 from first try values and iterations
+    T3 = 1300
+    cp_gas = 1
+    cp = 0
+    while (cp_gas - cp) > 1e-3:
+        cp = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                             CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                            1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3, 'P',
+                                                                                                p3,
+                                                                                                'water') * 2 * M_H20) + (
+                                                                                        CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                   'P', p3,
+                                                                                                   'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'Oxygen') * (
+                                                                                                           2 * Phi - 2) * M_O2)) / (
+                                                                                              1000 * (
+                                                                                                  1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                      2 * Phi - 2)) * M_gas) * B))
+        T3 = ((Cp_mean * (T2 - T1)) + (eta_comb * fuel_air * (H2_LHV * A + CH4_LHV * B))) / (
+                    (fuel_air + 1) * cp_gas) + T1
+        cp_gas = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                                 CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                                1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                    'P', p3,
+                                                                                                    'water') * 2 * M_H20) + (
+                                                                                            CP.PropsSI('Cp0mass', 'T',
+                                                                                                       T3, 'P', p3,
+                                                                                                       'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'Oxygen') * (
+                                                                                                               2 * Phi - 2) * M_O2)) / (
+                                                                                                  1000 * (
+                                                                                                      1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                          2 * Phi - 2)) * M_gas) * B))
+
+    H2O_value = 2 * A + 2 * B
+    CO2_value = 1 * B
+    N2_value = Phi * 3.76 * A + 2 * Phi * 3.76 * B
+    O2_value = (Phi - 1) * A + (2 * (Phi - 1)) * B
+    H2O_string = f"H2O: {H2O_value}"
+    CO2_string = f"CO2: {CO2_value}"
+    N2_string = f"N2: {N2_value}"
+    O2_string = f"O2: {O2_value}"
+    # Composition of flue gas after the combustion that varies depending on the fuel and the quantity
+    result_string = ", ".join([H2O_string, CO2_string, N2_string, O2_string])
+    comb.TPX = T3, (p3 * 1000), result_string
+    S3 = comb.entropy_mass
+    turb.SPX = S3, (p4 * 1000), result_string
+    T4s = turb.T
+    T4 = T3 - (eta_T * (T3 - T4s))
+    P_turb_mg = cp_gas * (T3 - T4)
+    P_el_ma = eta_gen * (P_turb_mg * (fuel_air + 1) - P_comp_ma)
+    m_a_1 = P_el_1 / P_el_ma
+    m_a_2 = P_el_2 / P_el_ma
+    Air_d = (CP.PropsSI('D', 'T', T1, 'P', p1, 'air') * 1000)  # kg/m3
+    m_f_1 = fuel_air * m_a_1
+    m_f_2 = fuel_air * m_a_2
+    # print("m_fuel: {:.4f}" .format(m_f), "kg/s")
+    m_H2_1 = fuel_air * m_a_1 * A
+    m_H2_2 = fuel_air * m_a_2 * A
+    m_HY = m_H2_1 + m_H2_2
+    #print("m_H2: {:.4f}".format(m_H2), "kg/s")
+    H2_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'hydrogen') * 1000)  # kg/m3
+    # print("H2 density {:.4f}" .format(H2_d), "kg/m3")
+    #print("m_H2: {:.4f}".format(m_H2 / H2_d), "m3/s")
+    m_CH4_1 = fuel_air * m_a_1 * B
+    m_CH4_2 = fuel_air * m_a_2 * B
+    m_CH4 = m_CH4_1 + m_CH4_2
+    #print("m_CH4: {:.4f}".format(m_CH4), "kg/s")
+    CH4_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'methane') * 1000)  # kg/m3
+    # print("Fuel density {:.4f}" .format(CH4_d), "kg/m3")
+    #print("m_CH4: {:.4f}".format(m_CH4 / CH4_d), "m3/s")
+    m_g = m_a_1 + m_a_2 + m_HY + m_CH4
+    m_water = (860 * 12)/3600
+    # Calculating the ratio of normalized hydrogen mass flow rate to normalized methane mass flow rate
+    Pep_1 = P_el_1
+    Pep_2 = P_el_2
+    Pep = Pep_1 + Pep_2
+    # kg each half an hour of hydrogen needed to operate the turbines
+    kg = m_HY * 60 * 30
+    # kg each half an hour of hydrogen produced by the electrolyser
+    Hydrogen = (ElectrolyzerP * Efficiency / LHV_H2) / 2 #kg/each half an hour
+    # Water mass flow rate
+    Water = (Hydrogen / (M_H2 * 2)) * (2 * M_H20)
+    # Difference of hydrogen production and demand every half an hour
+    ai = (Hydrogen - kg) / 1000
+    ei = 0
+    if ai > 0:
+        ei = ai
+        # Specific heat of the gas multiplied by flow rate to obtain heat flux
+        cp_gas_1023 = ((CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                           CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                              1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+        cp_gas_923 = ((CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                          CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                             1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+        cp_gas_823 = ((CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                          CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                             1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+        cp_gas_723 = ((CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                          CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                             1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+        cp_gas_623 = ((CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                          CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                             1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+        cp_gas_523 = ((CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                          CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                             1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+        cp_gas_473 = ((CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                          CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                             1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+        cp_gas_423 = ((CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'water') * 2 * M_H20) + (
+                (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                          CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                             1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+
+    gas_h = m_g * ((((cp_gas_423 + cp_gas_523) / 2 * 100)) + (((cp_gas_523 + cp_gas_623) / 2 * 100)) + (
+    ((cp_gas_623 + cp_gas_723) / 2 * 100)) + (((cp_gas_723 + cp_gas_823) / 2 * 100)) + (
+                   ((cp_gas_823 + cp_gas_923) / 2 * 100)) + (((cp_gas_923 + cp_gas_1023) / 2 * 100)))  # m_g * (((1.0709+1.0883)/2*100) + ((1.0883+1.1115)/2*100) + ((1.1115+1.1377)/2*100) + ((1.1377+1.1643)/2*100) + ((1.1643+1.1896)/2*100) + ((1.1896+1.1915)/2*50)+((1.0683+1.0709)/2*100))
+    # heat needed to heat the air
+    air_h = 458 * 12  # This is the value to keep it running in design condition from the electrolyzer model
+    # heat for the water to increase T from 25 to 200 C
+    # Saturated vapor enthalpy of Water at 1 atm in J/kg
+    H_V = CP.PropsSI('H', 'P', 101325, 'Q', 1, 'Water');  # print(H_V) 2675529.3255007486
+
+    # Saturated liquid enthalpy of Water at 1 atm in J/kg
+    H_L = CP.PropsSI('H', 'P', 101325, 'Q', 0, 'Water');  # print(H_L) 419057.7330940691
+
+    # Latent heat of vaporization of Water at 1 atm in kJ/kg
+    r = (H_V - H_L) / 1000  # 2256.4715924066794
+    qvap = r * m_water
+
+    cp_water_293 = (CP.PropsSI('Cp0mass', 'T', 293.15, 'P', p1, 'water')) / 1000
+    cp_water_373 = (CP.PropsSI('Cp0mass', 'T', 373.15, 'P', p1, 'water')) / 1000
+    cp_water_423 = (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p1, 'water')) / 1000
+    cp_water_473 = (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p1, 'water')) / 1000
+    qsens = m_water * ((cp_water_293 + cp_water_373) / 2 * 80 + (
+                cp_water_373 + cp_water_423) / 2 * 50)  # + (cp_water_373+cp_water_423)/2 * 50
+
+    water_h = (qvap + qsens)
+    # Heat difference between available and required every half an hour so it needs to be divided by 2 to get kWh or MWh
+    df = (gas_h - (qvap))
+
+    # Storing values
+    kg_H2_30min.append(kg)
+    index.append(date)
+    Wind.append(P)
+    Power.append(ElectrolyzerP)
+    H2.append(Hydrogen)
+    steam.append(Water)
+    difference.append(ai)
+    # Sum of all the difference every half an hour to obtain the overall trend for the hydrogen
+    bi = sum(difference)
+    storage.append(bi)
+    compressed.append(ei)
+    heat_g.append(gas_h/1000)
+    heat_a.append(air_h/1000)
+    heat_w.append(water_h/1000)
+    heat_diff.append(df/1000)
+    # Sum of all the difference every half an hour to obtain the overall trend for the heat
+    ki = sum(heat_diff)
+    heat_sto.append(ki/(2*1000)) #GWh
+
+    # Hydrogen compressor calculation to find the power
+    p_H2 = p1 * PR_H2  # Outlet pressure
+    #print(p_H2)
+    Hydro.TPX = TH2, (p_H2 * 1000), 'H2:1.0'
+    S1 = Hydro.entropy_mass
+    compH2.SPX = S1, (p_H2 * 1000), 'H2:1.0'
+    TH2s = comp.T
+    Cp_meanH2 = ((Hydro.cp + compH2.cp) / 2) / 1000
+    #print(Cp_meanH2)
+    TH22 = ((TH2s - TH2) / eta_H2) + TH2
+    P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
+    #print(ei * 1000/(60*30))
+    #print(P)
+    E = ei * 1000 / (60 * 30) * Cp_meanH2 * (TH22 - TH2) * 60 * 30 / 2 #kWh
+    #print(E)
+    energy.append(P)
+#maxim = max(compressed)
+#print("Maximum flow rate: {:2f} kg/s".format(maxim*1000/(60*30)))
+#en = sum(energy)
+#print("Total energy in a year: {:2f}".format(en))
+
+compr = sum(compressed)
+print("Total hydrogen ton compressed in a year: {:2f}".format(compr))
+total_sum = sum(kg_H2_30min)
+print("Total hydrogen ton required in a year: {:2f}".format(total_sum/1000))
+total_g = sum(heat_g)/2
+print("Total MWt gas in a year: {:2f}".format(total_g))
+total_a = sum(heat_a)/2
+print("Total MWt air in a year: {:2f}".format(total_a))
+total_w = sum(heat_w)/2
+print("Total MWt water in a year: {:2f}".format(total_w))
+
+# Plotting the graph of heat available
+plt.plot(index, heat_g, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat available')
+plt.xlabel('Days')
+plt.ylabel('Heat available from flue gases MW')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of heat difference
+plt.plot(index, heat_diff, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat difference to run the system')
+plt.xlabel('Days')
+plt.ylabel('Heat difference between flue gases and system MW ')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the heat storage
+plt.plot(index, heat_sto, marker='', linestyle='-')
+plt.title('Heat storage trend')
+plt.xlabel('Days')
+plt.ylabel('Cumulative heat difference GWh')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the compressor power and operation
+plt.plot(index, energy, marker='', linestyle='-')
+plt.title('kW of the compressor operation every 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('Compressor power demand kW')
+plt.grid(True)
+plt.show()
+
+plt.plot(index, kg_H2_30min, marker='', linestyle='-')
+plt.title('kg of H2 each 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('kg of H2 to power the turbines')
+plt.grid(True)
+plt.show()
+
+total_sum2 = sum(H2)
+print("Total hydrogen ton produced in a year: {:2f}".format(total_sum2/1000))
+
+# Plotting the graph for the hydrogen difference every half an hour
+plt.plot(index, difference, marker='', linestyle='-')
+plt.title('Hydrogen ton difference for each half an hour')
+plt.xlabel('Days')
+plt.ylabel('Kg of H2 difference in ton')
+plt.grid(True)
+plt.show()
+
+# Hydrogen storage size found on the maximum value obtained in the cumulative difference
+size = max(storage)
+minim = min(storage)
+print("Hydrogen storage size: {:2f} ton".format(size))
+print("Hydrogen storage deficit: {:2f} ton".format(minim))
+#hydrogen density
+H2_d = (CP.PropsSI('D','T', 180+273 , 'P', 7000, 'hydrogen') * 1000) #kg/m3
+print("H2 density: {:.4f} kg/m3".format(H2_d))
+print("Hydrogen storage size m3: {:2f}".format(size*1000/H2_d))
+
+# Plotting the graph for the storage trend (cumulative difference)
+plt.plot(index, storage, marker='', linestyle='-')
+plt.title('Hydrogen plot on time')
+plt.xlabel('Days')
+plt.ylabel('H2 produced in ton')
+plt.grid(True)
+plt.show()
+
+#Case study for year 2023 it's not considered as the turbine worked few hours
+# Provide the full path to the Excel file
+excel_file_path = r'C:\Users\andre\Desktop\materie\Erasmus\Articoli\Reference documents\1 Good ones\Turbine model\Turbine data\Wind-Peaker_2023.xlsx'
+# Read Excel file
+df = pd.read_excel(excel_file_path)
+# Display the first few rows of the DataFrame
+#print(df.head())
+
+for i in np.linspace(0, (365 * 24 * 2), (365 * 24 * 2)):
+    A = 1 #Full hydrogen operation
+    B = 0
+    h = int(i)
+    # Access value from the second column that is the power of the turbine
+    P_el = (df.iloc[h, 2] * 1000)
+    if P_el > 52000:
+        P_el = 52000
+    #print(P_el)
+    # Access value from the first column that is the date
+    date = df.iloc[h, 0]
+    #print(date)
+    # Wind power production
+    P = (df.iloc[h, 1] * 1000)
+    #print(P)
+    if P>=value:
+     ElectrolyzerP = value
+    if P < value:
+     ElectrolyzerP = P
+    # Isentropic efficiency of compressor and turbine obtained from maps
+    if 0 < P_el <= 5200:
+        eta_C = ((0.8205 * A) + (0.8209 * B))
+        eta_T = ((0.8501 * A) + (0.8535 * B))
+        eta_comb = 0.9864
+    if 5200 < P_el <= 10400:
+        eta_C = (((0.8205 * A) + (0.8209 * B)) + ((0.8273 * A) + (0.8274 * B))) / 2
+        eta_T = (((0.8501 * A) + (0.8535 * B)) + ((0.866 * A) + (0.8695 * B))) / 2
+        eta_comb = 0.9868
+    if 10400 < P_el <= 15600:
+        eta_C = (((0.8273 * A) + (0.8274 * B)) + ((0.8335 * A) + (0.8337 * B))) / 2
+        eta_T = (((0.866 * A) + (0.8695 * B)) + ((0.8784 * A) + (0.8801 * B))) / 2
+        eta_comb = 0.9871
+    if 15600 < P_el <= 20800:
+        eta_C = (((0.8335 * A) + (0.8337 * B)) + ((0.8398 * A) + (0.8398 * B))) / 2
+        eta_T = (((0.8784 * A) + (0.8801 * B)) + ((0.886 * A) + (0.8874 * B))) / 2
+        eta_comb = 0.9875
+    if 20800 < P_el <= 26000:
+        eta_C = (((0.8398 * A) + (0.8398 * B)) + ((0.8435 * A) + (0.8435 * B))) / 2
+        eta_T = (((0.886 * A) + (0.8874 * B)) + ((0.892 * A) + (0.8924 * B))) / 2
+        eta_comb = 0.9879
+    if 26000 < P_el <= 31200:
+        eta_C = (((0.8435 * A) + (0.8435 * B)) + ((0.8473 * A) + (0.8473 * B))) / 2
+        eta_T = (((0.892 * A) + (0.8924 * B)) + ((0.894 * A) + (0.8939 * B))) / 2
+        eta_comb = 0.9883
+    if 31200 < P_el <= 36400:
+        eta_C = (((0.8473 * A) + (0.8473 * B)) + ((0.8496 * A) + (0.8496 * B))) / 2
+        eta_T = (((0.894 * A) + (0.8939 * B)) + ((0.8951 * A) + (0.8952 * B))) / 2
+        eta_comb = 0.9887
+    if 36400 < P_el <= 41600:
+        eta_C = (((0.8496 * A) + (0.8496 * B)) + ((0.8509 * A) + (0.8509 * B))) / 2
+        eta_T = (((0.8951 * A) + (0.8952 * B)) + ((0.8952 * A) + (0.8951 * B))) / 2
+        eta_comb = 0.9891
+    if 41600 < P_el <= 46800:
+        eta_C = (((0.8509 * A) + (0.8509 * B)) + ((0.8511 * A) + (0.8511 * B))) / 2
+        eta_T = (((0.8952 * A) + (0.8951 * B)) + ((0.8933 * A) + (0.8931 * B))) / 2
+        eta_comb = 0.9895
+    if 46800 < P_el <= 52000:
+        eta_C = (((0.8511 * A) + (0.8511 * B)) + ((0.85 * A) + (0.85 * B))) / 2
+        eta_T = (((0.8933 * A) + (0.8931 * B)) + ((0.89 * A) + (0.89 * B))) / 2
+        eta_comb = 0.99
+    # repetition of the thermodynamic cycle to calculate every parameter for every given power
+    M_Air = (M_N2 * 0.79 + M_O2 * 0.21)  # 28.84 but with argon would be 28.96
+    M_gas = (((2 * M_H20 + Phi * 3.76 * M_N2 + (Phi - 1) * M_O2) / (2 + Phi * 3.76 + (Phi - 1))) * A) + (((1 * M_CO2 + 2 * M_H20 + Phi * 2 * 3.76 * M_N2 + (2 * Phi - 2) * M_O2) / (1 + 2 + 2 * Phi * 3.76 + (2 * Phi - 2))) * B)
+    n_air = 1 / 0.21  # number of air moles to burn 2 moles of H2
+    m_air = Phi * n_air * M_Air  # g of air for 4 g of H2
+    m_H2 = (M_H2 * 2) * A
+    m_CH4 = (M_CH4 * 1) * B
+    m_fuel = m_H2 + m_CH4
+    fuel_air = m_fuel / m_air
+    #print(fuel_air)
+    # Calculation of T3 from first try values and iterations
+    T3 = 1300
+    cp_gas = 1
+    cp = 0
+    while (cp_gas - cp) > 1e-3:
+        cp = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                             CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                            1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3, 'P',
+                                                                                                p3,
+                                                                                                'water') * 2 * M_H20) + (
+                                                                                        CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                   'P', p3,
+                                                                                                   'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                               CP.PropsSI('Cp0mass',
+                                                                                                          'T', T3, 'P',
+                                                                                                          p3,
+                                                                                                          'Oxygen') * (
+                                                                                                           2 * Phi - 2) * M_O2)) / (
+                                                                                              1000 * (
+                                                                                                  1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                      2 * Phi - 2)) * M_gas) * B))
+        T3 = ((Cp_mean * (T2 - T1)) + (eta_comb * fuel_air * (H2_LHV * A + CH4_LHV * B))) / (
+                    (fuel_air + 1) * cp_gas) + T1
+        cp_gas = (((((CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'water') * 2 * M_H20) + (
+                    (CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                                 CP.PropsSI('Cp0mass', 'T', T3, 'P', p3, 'Oxygen') * (Phi - 1) * M_O2)) / (
+                                1000 * (2 + Phi * 3.76 + (Phi - 1)) * M_gas)) * A) + ((((CP.PropsSI('Cp0mass', 'T', T3,
+                                                                                                    'P', p3,
+                                                                                                    'water') * 2 * M_H20) + (
+                                                                                            CP.PropsSI('Cp0mass', 'T',
+                                                                                                       T3, 'P', p3,
+                                                                                                       'nitrogen')) * 2 * Phi * 3.76 * M_N2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'CarbonDioxide') * 1 * M_CO2) + (
+                                                                                                   CP.PropsSI('Cp0mass',
+                                                                                                              'T', T3,
+                                                                                                              'P', p3,
+                                                                                                              'Oxygen') * (
+                                                                                                               2 * Phi - 2) * M_O2)) / (
+                                                                                                  1000 * (
+                                                                                                      1 + 2 + 2 * Phi * 3.76 + (
+                                                                                                          2 * Phi - 2)) * M_gas) * B))
+
+    H2O_value = 2 * A + 2 * B
+    CO2_value = 1 * B
+    N2_value = Phi * 3.76 * A + 2 * Phi * 3.76 * B
+    O2_value = (Phi - 1) * A + (2 * (Phi - 1)) * B
+    H2O_string = f"H2O: {H2O_value}"
+    CO2_string = f"CO2: {CO2_value}"
+    N2_string = f"N2: {N2_value}"
+    O2_string = f"O2: {O2_value}"
+    # Composition of flue gas after the combustion that varies depending on the fuel and the quantity
+    result_string = ", ".join([H2O_string, CO2_string, N2_string, O2_string])
+    comb.TPX = T3, (p3 * 1000), result_string
+    S3 = comb.entropy_mass
+    turb.SPX = S3, (p4 * 1000), result_string
+    T4s = turb.T
+    T4 = T3 - (eta_T * (T3 - T4s))
+    P_turb_mg = cp_gas * (T3 - T4)
+    P_el_ma = eta_gen * (P_turb_mg * (fuel_air + 1) - P_comp_ma)
+    m_a = P_el / P_el_ma
+    Air_d = (CP.PropsSI('D', 'T', T1, 'P', p1, 'air') * 1000)  # kg/m3
+    m_f = fuel_air * m_a
+    # print("m_fuel: {:.4f}" .format(m_f), "kg/s")
+    m_H2 = fuel_air * m_a * A
+    #print("m_H2: {:.4f}".format(m_H2), "kg/s")
+    H2_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'hydrogen') * 1000)  # kg/m3
+    # print("H2 density {:.4f}" .format(H2_d), "kg/m3")
+    #print("m_H2: {:.4f}".format(m_H2 / H2_d), "m3/s")
+    m_CH4 = fuel_air * m_a * B
+    #print("m_CH4: {:.4f}".format(m_CH4), "kg/s")
+    CH4_d = (CP.PropsSI('D', 'T', T2, 'P', (p2*1.3), 'methane') * 1000)  # kg/m3
+    # print("Fuel density {:.4f}" .format(CH4_d), "kg/m3")
+    #print("m_CH4: {:.4f}".format(m_CH4 / CH4_d), "m3/s")
+    m_g = m_a + m_H2 + m_CH4
+    # Water mass flow rate obtained from the technical sheet
+    m_water = (a * 860)/3600
+    Pep = P_el
+    # kg each half an hour of hydrogen needed to operate the turbine
+    kg = m_H2 * 60 * 30
+    # kg each half an hour of hydrogen produced by the electrolyser
+    Hydrogen = (ElectrolyzerP * Efficiency / LHV_H2) / 2
+    # kg each half an hour of water demand of the electrolyser
+    Water = (Hydrogen / (M_H2 * 2)) * (2 * M_H20)
+    # Difference of hydrogen production and demand every half an hour
+    ai = (Hydrogen - kg) / 1000
+    ei = 0
+    if ai > 0:
+        ei = ai # If the difference is positive it means the hydrogen is stored
+    # Specific heat of the gas for every 100 C to have a good approximation
+    cp_gas_1023 = ((CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                    CP.PropsSI('Cp0mass', 'T', 1023.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                       1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_923 = ((CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 923.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_823 = ((CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 823.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_723 = ((CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                       CP.PropsSI('Cp0mass', 'T', 723.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                          1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_623 = ((CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 623.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_523 = ((CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 523.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_473 = ((CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+    cp_gas_423 = ((CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'water') * 2 * M_H20) + (
+            (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'nitrogen')) * Phi * 3.76 * M_N2) + (
+                      CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p3, 'oxygen')) * (Phi - 1) * M_O2) / (
+                         1000 * (2 + Phi * 3.76 + (Phi - 1) * 1) * M_gas)
+
+    #If high T gas considered change 423 with 473 and put 50 instead of 100
+    gas_h = m_g * ((((cp_gas_423+cp_gas_523)/2*100)) + (((cp_gas_523+cp_gas_623)/2*100)) + (((cp_gas_623+cp_gas_723)/2*100)) + (((cp_gas_723+cp_gas_823)/2*100)) + (((cp_gas_823+cp_gas_923)/2*100)) + (((cp_gas_923+cp_gas_1023)/2*100))) #m_g * (((1.0709+1.0883)/2*100) + ((1.0883+1.1115)/2*100) + ((1.1115+1.1377)/2*100) + ((1.1377+1.1643)/2*100) + ((1.1643+1.1896)/2*100) + ((1.1896+1.1915)/2*50)+((1.0683+1.0709)/2*100))
+    # heat needed to heat the air (obtained from formulae on SOC code)
+    air_h = 458 * a #This is the value to keep it running in design condition from the electrolyzer model
+    # heat for the water to increase T from 25 to 200 C
+    # Saturated vapor enthalpy of Water at 1 atm in J/kg
+    H_V = CP.PropsSI('H', 'P', 101325, 'Q', 1, 'Water');  # print(H_V) 2675529.3255007486
+
+    # Saturated liquid enthalpy of Water at 1 atm in J/kg
+    H_L = CP.PropsSI('H', 'P', 101325, 'Q', 0, 'Water');  # print(H_L) 419057.7330940691
+
+    # Latent heat of vaporization of Water at 1 atm in kJ/kg
+    r = (H_V - H_L) / 1000  # 2256.4715924066794
+    qvap = r * m_water
+
+    cp_water_293 = (CP.PropsSI('Cp0mass', 'T', 293.15, 'P', p1, 'water')) / 1000
+    cp_water_373 = (CP.PropsSI('Cp0mass', 'T', 373.15, 'P', p1, 'water')) / 1000
+    cp_water_423 = (CP.PropsSI('Cp0mass', 'T', 423.15, 'P', p1, 'water')) / 1000
+    cp_water_473 = (CP.PropsSI('Cp0mass', 'T', 473.15, 'P', p1, 'water')) / 1000
+    qsens = m_water * ((cp_water_293+cp_water_373)/2 * 80 + (cp_water_373+cp_water_423)/2 * 50) #+ (cp_water_373+cp_water_423)/2 * 50
+
+    water_h = (qvap + qsens)
+    # Heat difference between available and required every half an hour
+    df = gas_h - (water_h+air_h) #change the term of the requirement to get partial demand
+    # Storing values
+    kg_H2_30min.append(kg)
+    index.append(date)
+    Wind.append(P)
+    Power.append(ElectrolyzerP)
+    H2.append(Hydrogen)
+    steam.append(Water)
+    difference.append(ai)
+    # Sum of all the difference every half an hour to obtain the overall trend for the hydrogen
+    bi = sum(difference)
+    storage.append(bi)
+    compressed.append(ei)
+    heat_g.append(gas_h/1000)
+    heat_a.append(air_h/1000)
+    heat_w.append(water_h/1000)
+    heat_diff.append(df/1000)
+    # Sum of all the difference every half an hour to obtain the overall trend for the heat demand
+    ki = sum(heat_diff)
+    heat_sto.append(ki/(2*1000)) #GWh
+    #Hydrogen compressor calculation to find the power
+    p_H2 = p1 * PR_H2  # Outlet pressure
+    #print(p_H2)
+    Hydro.TPX = TH2, (p_H2 * 1000), 'H2:1.0'
+    S1 = Hydro.entropy_mass
+    compH2.SPX = S1, (p_H2 * 1000), 'H2:1.0'
+    TH2s = comp.T
+    Cp_meanH2 = ((Hydro.cp + compH2.cp) / 2) / 1000
+    #print(Cp_meanH2)
+    TH22 = ((TH2s - TH2) / eta_H2) + TH2
+    #P = ei * 1000/(60*30) * Cp_meanH2 * (TH22 - TH2) #kW
+    #print(ei * 1000/(60*30))
+    #print(P)
+    #E = ei * 1000 / (60 * 30) * Cp_meanH2 * (TH22 - TH2) * 60 * 30 / 2 #kWh
+    #print(E)
+    #energy.append(P)
+#maxim = max(compressed)
+#print("Maximum flow rate: {:2f} kg/s".format(maxim*1000/(60*30)))
+#en = sum(energy)
+#print("Total energy in a year: {:2f}".format(en))
+
+#printing of results
+compr = sum(compressed)
+print("Total hydrogen ton compressed in a year: {:2f}".format(compr))
+total_sum = sum(kg_H2_30min)
+print("Total hydrogen ton required in a year: {:2f}".format(total_sum/1000))
+total_g = sum(heat_g)/2
+print("Total MWht gas in a year: {:2f}".format(total_g))
+total_a = sum(heat_a)/2
+print("Total MWht air in a year: {:2f}".format(total_a))
+total_w = sum(heat_w)/2
+print("Total MWht water in a year: {:2f}".format(total_w))
+
+# Plotting the graph of heat available
+plt.plot(index, heat_g, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat available')
+plt.xlabel('Days')
+plt.ylabel('Heat available from flue gases MW')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of heat difference
+plt.plot(index, heat_diff, marker='', linestyle='-')
+plt.title('Mean MW every half an hour of heat difference to run the system')
+plt.xlabel('Days')
+plt.ylabel('Heat difference between flue gases and system MW ')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the heat storage
+plt.plot(index, heat_sto, marker='', linestyle='-')
+plt.title('Heat storage trend')
+plt.xlabel('Days')
+plt.ylabel('Cumulative heat difference GWh')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of the compressor power and operation
+plt.plot(index, energy, marker='', linestyle='-')
+plt.title('kW of the compressor operation every 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('Compressor power demand kW')
+plt.grid(True)
+plt.show()
+
+# Plotting the graph of hydrogen requirement
+plt.plot(index, kg_H2_30min, marker='', linestyle='-')
+plt.title('kg of H2 each 30 min vs time of operation')
+plt.xlabel('Days')
+plt.ylabel('kg of H2 to power the turbines')
+plt.grid(True)
+plt.show()
+
+total_sum2 = sum(H2)
+print("Total hydrogen ton produced in a year: {:2f}".format(total_sum2/1000))
+
+# Plotting the graph for the hydrogen difference every half an hour
+plt.plot(index, difference, marker='', linestyle='-')
+plt.title('Hydrogen ton difference for each half an hour')
+plt.xlabel('Days')
+plt.ylabel('Kg of H2 difference in ton')
+plt.grid(True)
+plt.show()
+
+# Hydrogen storage size found on the maximum value obtained in the cumulative difference
+size = max(storage)
+minim = min(storage)
+print("Hydrogen storage size: {:2f} ton".format(size))
+print("Hydrogen storage deficit: {:2f} ton".format(minim))
+#hydrogen density
+H2_d = (CP.PropsSI('D','T', 180+273 , 'P', 7000, 'hydrogen') * 1000) #kg/m3
+print("H2 density: {:.4f} kg/m3".format(H2_d))
+print("Hydrogen storage size m3: {:2f}".format(size*1000/H2_d))
+
+# Plotting the graph for the storage trend (cumulative difference)
+plt.plot(index, storage, marker='', linestyle='-')
+plt.title('Hydrogen plot on time')
+plt.xlabel('Days')
+plt.ylabel('H2 produced in ton')
+plt.grid(True)
+plt.show()
+
