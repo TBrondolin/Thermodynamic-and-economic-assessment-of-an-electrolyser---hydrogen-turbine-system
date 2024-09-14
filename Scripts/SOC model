@@ -1,0 +1,270 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import cantera as ct
+# get the full list of species
+species = {S.name: S for S in ct.Species.list_from_file("nasa_gas.yaml")}
+# define the gas species - fuel, air, and combustion products
+complete_species = [species[S] for S in ("CH4", "H2", "O2", "N2", "CO2", "H2O")]
+water = ct.Solution(thermo="ideal-gas", species=complete_species)
+water2 = ct.Solution(thermo="ideal-gas", species=complete_species)
+oxygen = ct.Solution(thermo="ideal-gas", species=complete_species)
+oxygen2 = ct.Solution(thermo="ideal-gas", species=complete_species)
+hydrogen = ct.Solution(thermo="ideal-gas", species=complete_species)
+hydrogen2 = ct.Solution(thermo="ideal-gas", species=complete_species)
+# Constants
+R = 8.314  # Gas constant in J/(mol*K)
+F = 96485  # Faraday's constant in C/mol
+n = 2  # Number of electrons transferred in the electrochemical reaction
+stefan = 5.67e-8 #W m-2 K-4
+
+# Pressures and molar fractions
+PH2 = 1.013  # pressure in bar
+PO2 = 1.013  # pressure in bar
+PH2O = 5.5  # pressure in bar
+Pamb = 1.013 # atmosferic pressure in bar
+
+# Cell parameters
+thickness_A_eld = 10e-6 # thickness anode meters
+thickness_F_eld = 310e-6 # thickness cathode meters
+thickness_el = 10e-6 # thickness electrolyte layer meters
+thickness_IC = 4.4e-3 # thickness interconnect meters
+ASR = 1.211543017652905e-05 # ohm / m2 from Wang
+beta = 0.5  # simmetrical equation
+gamma_A_eld = 2.051e9  # A/sm
+Eact_A_eld = 1.2e5  # activation energy J/mol
+gamma_F_eld = 1.344e10  # A/sm
+Eact_F_eld = 1e5  # activation energy J/mol
+C0H2O = 1 # bulk concentration of reagent in the cell
+rp = 1.4e-6 #m pore size source 27
+
+# Molar masses, diffusion volumes and other parameters
+MH2O = 18 #g/mol
+MH2 = 2
+MO2 = 16
+VH2 = 7.07 #cm
+VH2O = 12.7 #cm
+tau = 3 # source 26 tortuosity
+xi = 0.3 # source 26 porosity
+p = PH2O + PH2 # total pressure bar
+Vth = 1.285 #V
+
+# Data for calculation of heat flux
+#DH = 242000 # j/mol can be considered W/mol if the time is 1 second
+
+#Temperatures
+T = 1023.15  # Temperature in Kelvin #delta_G_standard = 474.280  # Standard Gibbs free energy change in kJ/mol delta_H = 285.830  # kJ/mol delta_S = 94.91 / 1000  # kJ/(mol K) delta_G_800C = 1 #delta_G_standard + delta_H * (T - T_ref) - T * delta_S * (np.log(T) - np.log(T_ref)) print("dg:", delta_G_800C)
+T_ref = 298.15  # K
+Ta = 973.15 #K
+#user_input = input("Enter the current in A " )
+current = 47.15 # 47.15 A is design condition, 128 A is thermoneutral point
+A_cell = 1e-2
+A = 1e-2 #m2 active area
+j = current / A
+print("Current Density", j/10000, "A/cm2")
+
+
+# Calculation of reversible voltage
+def calculate_E0(T):
+    E0 = 1.2535 - 0.00024516 * T #delta_G_800C / (n * F) 1.29 – 0.000292 (T–273)
+    #print("E0:", E0)
+    return E0
+
+
+# Function to calculate Nernst voltage
+def calculate_nernst(E0, R, T, n, F, PH2):
+    VNernst = E0 + ((R * T) / (n * F) * np.log(((PH2 * (PO2 ** 0.5)) / (PH2O)))) #+ (R * T) / (2 * n * F) * np.log(PH2O / Pamb) #VNernst = E0 + ((R * T) / (n * F) * np.exp(-(((XH2 ** 2) * XO2 / (XH2O ** 2)))))
+    return VNernst
+
+# Calculation of exchange current densities for the electrodes
+def calculate_j0_A_eld(gamma_A_eld, Eact_A_eld, R, T):
+    j0_A_eld = gamma_A_eld * np.exp(-Eact_A_eld / (R * T))
+    return j0_A_eld
+
+def calculate_j0_F_eld(gamma_F_eld, Eact_F_eld, R, T):
+    j0_F_eld = gamma_F_eld * np.exp(-Eact_F_eld / (R * T))
+    return j0_F_eld
+
+# Calculation of activation overpotential
+def calculate_eta_act(R, T, F, j, j0_A_eld, j0_F_eld):
+    term1 = (R * T) / F * np.arcsinh(j / (2 * j0_A_eld))
+    #print(term1)
+    term2 = (R * T) / F * np.arcsinh(j / (2 * j0_F_eld))
+    #print(term2)
+    eta_act = term1 + term2
+
+    return eta_act
+
+# Calculation of ohmic overpotential
+def calculate_eta_ohm(thickness_A_eld, thickness_F_eld, thickness_el, thickness_IC, ASR, j, T, current):
+    eta_A_eld = (thickness_A_eld * current) / (((42 * 10e6) / T) * np.exp(-1200 / T))
+    #print(eta_A_eld)
+    eta_F_eld = (thickness_F_eld * current) / (((95 * 10e6) / T) * np.exp(-1150 / T))
+    #print(eta_F_eld)
+    eta_el = (thickness_el * current) / ((334 * 10e4) * np.exp(-10300 / T))
+    #print(eta_el)
+    eta_IC = (thickness_IC * current) / (((9.3 * 10e6) / T) * np.exp(-1100 / T))
+    #print(eta_IC)
+    eta_contact = ASR * j
+    #print(eta_contact)
+    eta_ohm = eta_A_eld + eta_F_eld + eta_el + eta_IC + eta_contact
+
+    return eta_ohm
+
+# Calculation of concentration overpotential
+def calculate_eta_conc(C0H2O, rp, MH2O, MH2, VH2, VH2O, tau, xi, p, thickness_F_eld, j):
+
+    #Cathode calculations
+    DH2O_k = (2 / 3) * (rp) * ((8 * R * T * np.pi * MH2O)**(1/2))
+    DH2O_H2 = (10e-3 * (T ** 1.75) * ((1/MH2O + 1/MH2) ** 1/2)) / (p * ((VH2O ** 1/3 + VH2 ** 1/3) ** 2))
+    #print(DH2O_k)
+    #print(DH2O_H2)
+    DeffH2O = ((tau / xi * (1 / DH2O_k + 1 / DH2O_H2)) ** (-1))
+    jL = n * F * DeffH2O * C0H2O / thickness_F_eld
+
+    #print("jL:", jL/10000, "A/cm2")#11.6 A/cm2 for one stack
+    #print("j:", j/10000, "A/cm2")
+
+    eta_conc_A_eld = R * T / (4 * F) * np.log(jL / (jL - j))
+    #print(eta_conc_A_eld)
+    eta_conc_F_eld = R * T / (2 * F) * np.log(jL / (jL - j))
+    #print(eta_conc_F_eld)
+    eta_conc = eta_conc_A_eld + eta_conc_F_eld
+    return eta_conc
+
+# Calculation of total cell voltage
+def calculate_cell(VNernst, eta_act, eta_conc, eta_ohm):
+    Vcell = VNernst + eta_act + eta_conc + eta_ohm
+    return Vcell
+
+# Calculate E0 voltage
+E0 = calculate_E0(T)
+
+# Calculate J current density
+j0_A_eld = calculate_j0_A_eld(gamma_A_eld, Eact_A_eld, R, T)
+j0_F_eld = calculate_j0_F_eld(gamma_F_eld, Eact_F_eld, R, T)
+
+j0 = j0_A_eld
+
+# Calculate overpotentials
+eta_act = calculate_eta_act(R, T, F, j, j0_A_eld, j0_F_eld)
+#print(j0_A_eld)
+#print(j0_F_eld)
+#k = calculate_exchange_current_density(j0, beta, n, F, eta_act, T)
+
+# Calculate overpotentials
+eta_ohm = calculate_eta_ohm(thickness_A_eld, thickness_F_eld, thickness_el, thickness_IC, ASR, j, T, current)
+
+# Calculate overpotentials
+eta_conc = calculate_eta_conc(C0H2O, rp, MH2O, MH2, VH2, VH2O, tau, xi, p, thickness_F_eld, j)
+
+# Calculate Nernst voltage
+VNernst = calculate_nernst(E0, R, T, n, F, PH2)
+
+
+# Calculate Cell voltage
+Vcell = calculate_cell(VNernst, eta_act, eta_conc, eta_ohm)
+
+# Calculate Cell efficiency
+electrical_efficiency = ((VNernst)/ Vcell)
+
+# Calculate cell power
+N = 140 * 37 # Number of cells per stack
+K = 10 # Number of stacks and units
+power = Vcell * j * A * N * K / 1000 # Power in KW
+lhv_h2 = 33  # Wh/kg
+#dS = 188.8 - (130.7 + 205.2 / 2) # H2O - (H2+1/2O2)
+
+# Calculate stack voltage
+Vstack = Vcell * N
+
+
+# Calculate cell flow rates
+H2 = (power * 1 * electrical_efficiency / lhv_h2)
+m_H2 = H2 #(j * N * A * MH2 * 3.6 / (2 * F)) * K
+m_H2O = H2 * 12.8 # Empirical from technical sheet of electrolyzer #(j * N * A * MH2O * 3.6 / (2 * F)) * K
+m_O2 = m_H2O - H2 #(j * N * A * MO2 * 3.6 / (2 * F)) * K
+
+# Model of heat loss
+Q_joule = j * A * Vcell * N * K #Joule heating
+Q_reaction = j * A * Vth * N * K #Heat required for reation
+Q_net = j * A * (Vcell - Vth) * N * K
+
+
+# Print results
+print("Reversible Voltage: {:.4f} V".format(E0))
+print("Nernst Voltage: {:.4f} V".format(VNernst))
+print("Ohmic Overpotential: {:.4f} V".format(eta_ohm))
+print("Activation Overpotential: {:.4f} V".format(eta_act))
+print("Concentration Overpotential: {:.4f} V".format(eta_conc))
+print("Potential of the cell: {:.4f} V".format(Vcell))
+#print("Potential of the stack: {:.4f} V".format(Vstack))
+print("Power: {:.4f}".format(power/1000),"MWe")
+print("electrical efficiency: {:.4f}".format(electrical_efficiency))
+print("H2 flow rate kg/h: {:.4f}".format(H2))
+print("H2 flow rate kg/h: {:.4f}".format(m_H2))
+print("O2 flow rate kg/h: {:.4f}".format(m_O2))
+print("H2O flow rate kg/h: {:.4f}".format(m_H2O))
+print("Heat of joule losses: {:.1f} kW".format(Q_joule/1000))
+print("Heat of reaction: {:.1f} kW".format(Q_reaction/1000))
+print("Heat net value: {:.1f} kW".format(Q_net/1000))
+
+
+# Generate a range of current density values
+j_values = np.linspace(0, 30000, 100000)  # Adjust the range and number of points as needed
+
+# Calculate corresponding Vcell values
+Vcell_values = []
+Power = []
+eff = []
+heat = []
+for j_val in j_values:
+    # Recalculate activation, ohmic, and diffusion losses for each j value
+    eta_act_val = calculate_eta_act(R, T, F, j_val, j0_A_eld, j0_F_eld)
+    eta_ohmic_val = calculate_eta_ohm(thickness_A_eld, thickness_F_eld, thickness_el, thickness_IC, ASR, j_val, T, current)
+    eta_conc_val = calculate_eta_conc(C0H2O, rp, MH2O, MH2, VH2, VH2O, tau, xi, p, thickness_F_eld, j_val)
+
+    # Calculate Vcell for each j value
+    VNernst_val = calculate_nernst(E0, R, T, n, F, PH2)
+    Vcell_val = calculate_cell(VNernst_val, eta_act_val, eta_conc_val, eta_ohmic_val)
+    power = Vcell_val * j_val * A * N * K / 1000000  # Power in MW
+    Eta = VNernst_val/Vcell_val * 100
+    Q = j_val * A * (Vcell_val - Vth) * N * K
+
+    Power.append(power)
+    Vcell_values.append(Vcell_val)
+    eff.append(Eta)
+    heat.append(Q/1000000)
+
+
+# Plot the graph
+plt.plot(Power, heat, label='Heat flux of the system')
+plt.xlabel('Electric Power MW')
+plt.ylabel('Heat of SOEC system MW')
+plt.title('Power vs Heat of system')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(j_values/10000, eff, label='Efficiency')
+plt.xlabel('Current density A/cm^2')
+plt.ylabel('Efficiency')
+plt.title('Current density vs Efficiency')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(j_values/10000, Vcell_values, label='Cell Voltage (V)')
+plt.xlabel('Current Density (A/cm^2)')
+plt.ylabel('Cell Voltage (V)')
+plt.title('Cell Voltage vs Current Density')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.plot(Power, Vcell_values, label='Cell Voltage (V)')
+plt.xlabel('Power (MW)')
+plt.ylabel('Cell Voltage (V)')
+plt.title('Cell Voltage vs Power')
+plt.legend()
+plt.grid(True)
+plt.show()
