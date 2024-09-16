@@ -200,7 +200,7 @@ plt.xlim(6800, 9000)
 plt.show()
 
 # Provide the full path to the Excel file (excel with turbine and wind farm operation)
-path = r'C:\Users\andre\Desktop\materie\Erasmus\Articoli\Reference documents\1 Good ones\Turbine model\Turbine data\Wind-Peaker_2022.xlsx'
+path = r'C:Wind-Peaker_2022.xlsx'
 # Read Excel file
 kk = pd.read_excel(path)
 
@@ -1065,7 +1065,7 @@ plt.show()
 
 #Case study for year 2023 it's not considered as the turbine worked few hours
 # Provide the full path to the Excel file
-excel_file_path = r'C:\Users\andre\Desktop\materie\Erasmus\Articoli\Reference documents\1 Good ones\Turbine model\Turbine data\Wind-Peaker_2023.xlsx'
+excel_file_path = r'C:Wind-Peaker_2023.xlsx'
 # Read Excel file
 df = pd.read_excel(excel_file_path)
 # Display the first few rows of the DataFrame
