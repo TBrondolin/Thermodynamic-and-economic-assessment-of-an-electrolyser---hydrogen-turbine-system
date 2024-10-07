@@ -2,7 +2,7 @@
 
 ## Acknowledgements
 
-This master thesis was carried with the help of the [H-Wind](https://www.marei.ie/project/h-wind) research group supervised by [P.Leahy](https://www.ucc.ie/en/civileng/people/drpaulleahy/) and with the help of prof. [A.Stoppato](https://www.dii.unipd.it/category/ruoli/personale-docente?key=ABF85794D1453051C2A6C35C896F3277) from Padua university.
+This master thesis was carried with the help of the [H-Wind](https://www.marei.ie/project/h-wind) research group supervised by [P. Leahy](https://www.ucc.ie/en/civileng/people/drpaulleahy/) and with the help of prof. [A. Stoppato](https://www.dii.unipd.it/category/ruoli/personale-docente?key=ABF85794D1453051C2A6C35C896F3277) from Padua university.
 
 
 ## Description
